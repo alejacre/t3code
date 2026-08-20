@@ -219,6 +219,32 @@ describe("BrowserSession", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("does not reapply imported cookies after clearing browser storage", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      yield* browserSessions.getSession("scope-a");
+      yield* browserSessions.importCookies([
+        {
+          url: "https://midway-auth.amazon.com/",
+          name: "midway",
+          value: "test",
+          domain: ".amazon.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+        },
+      ]);
+
+      yield* browserSessions.clearCookies();
+      yield* browserSessions.getSession("scope-b");
+
+      const firstPartition = yield* browserSessions.getPartition("scope-a");
+      const secondPartition = yield* browserSessions.getPartition("scope-b");
+      assert.equal(sessions.get(firstPartition)?.cookies.set.mock.calls.length, 1);
+      assert.equal(sessions.get(secondPartition)?.cookies.set.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("correlates clear failures while still attempting every session", () =>
     Effect.gen(function* () {
       const browserSessions = yield* BrowserSession.BrowserSession;

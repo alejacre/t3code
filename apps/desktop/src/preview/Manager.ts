@@ -4177,23 +4177,16 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           ),
         );
     }),
-    importChromeCookies: Effect.fn("PreviewManager.importChromeCookies")(function* () {
-      const imported = yield* chromeCookieImporter
-        .importLastUsedProfile()
-        .pipe(
-          Effect.mapError(
-            (cause) => new PreviewOperationError({ operation: "importChromeCookies", cause }),
-          ),
-        );
-      const importedCount = yield* browserSession
-        .importCookies(imported.cookies)
-        .pipe(
-          Effect.mapError(
-            (cause) => new PreviewOperationError({ operation: "importChromeCookies", cause }),
-          ),
-        );
-      return { profileName: imported.profileName, importedCount };
-    }),
+    importChromeCookies: Effect.fn("PreviewManager.importChromeCookies")(
+      function* () {
+        const imported = yield* chromeCookieImporter.importLastUsedProfile();
+        const importedCount = yield* browserSession.importCookies(imported.cookies);
+        return { profileName: imported.profileName, importedCount };
+      },
+      Effect.mapError(
+        (cause) => new PreviewOperationError({ operation: "importChromeCookies", cause }),
+      ),
+    ),
     clearCache: Effect.fn("PreviewManager.clearCache")(function* () {
       yield* browserSession
         .clearCache()

@@ -168,6 +168,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
     isPartition: (partition) => partition.startsWith(PREVIEW_PARTITION_PREFIX),
     getSession,
     clearCookies: Effect.fn("BrowserSession.clearCookies")(function* () {
+      yield* SynchronizedRef.set(importedCookiesRef, []);
       const sessions = yield* SynchronizedRef.get(sessionsRef);
       yield* Effect.all(
         [...sessions.entries()].map(([partition, browserSession]) =>

@@ -101,7 +101,7 @@ export function decryptChromeCookie(
   }
 }
 
-function toElectronCookie(row: ChromeCookieRow, value: string): CookiesSetDetails | null {
+export function toElectronCookie(row: ChromeCookieRow, value: string): CookiesSetDetails | null {
   if (!matchesImportedDomain(row.host_key)) return null;
   const host = row.host_key.replace(/^\./, "");
   if (host.length === 0 || row.name.length === 0) return null;
@@ -110,13 +110,13 @@ function toElectronCookie(row: ChromeCookieRow, value: string): CookiesSetDetail
   const cookie: CookiesSetDetails = {
     name: row.name,
     value,
-    domain: row.host_key,
     path: row.path || "/",
     secure: row.is_secure === 1n,
     httpOnly: row.is_httponly === 1n,
     sameSite,
     url: `${row.is_secure === 1n ? "https" : "http"}://${host}${row.path || "/"}`,
   };
+  if (row.host_key.startsWith(".")) cookie.domain = row.host_key;
   if (row.has_expires === 1n) {
     const expirationDate = chromeExpiryToUnixSeconds(row.expires_utc);
     if (expirationDate > 0) cookie.expirationDate = expirationDate;

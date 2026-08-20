@@ -2,7 +2,7 @@ import { createCipheriv, createHash } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
 
-import { decryptChromeCookie } from "./ChromeCookieImporter.ts";
+import { decryptChromeCookie, toElectronCookie } from "./ChromeCookieImporter.ts";
 
 const encryptCookie = (plaintext: Buffer, key: Buffer): Uint8Array => {
   const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
@@ -42,5 +42,27 @@ describe("ChromeCookieImporter", () => {
       ),
       "plain",
     );
+  });
+
+  it("preserves the distinction between host-only and domain cookies", () => {
+    const row = {
+      name: "session",
+      value: "",
+      encrypted_value: new Uint8Array(),
+      path: "/",
+      expires_utc: 0n,
+      is_secure: 1n,
+      is_httponly: 1n,
+      has_expires: 0n,
+      samesite: 1n,
+    };
+
+    const hostOnly = toElectronCookie({ ...row, host_key: "amazon.dev" }, "host-only");
+    const domain = toElectronCookie({ ...row, host_key: ".amazon.dev" }, "domain");
+
+    if (hostOnly === null || domain === null) assert.fail("Expected supported Amazon cookies");
+    assert.notProperty(hostOnly, "domain");
+    assert.equal(hostOnly.url, "https://amazon.dev/");
+    assert.equal(domain.domain, ".amazon.dev");
   });
 });
