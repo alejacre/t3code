@@ -1852,10 +1852,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           appendTruncationMarker: true,
         },
       );
+      const configuredTemplatePath = yield* runGitStdout(
+        "GitVcsDriver.prepareCommitContext.commitTemplatePath",
+        cwd,
+        ["config", "--path", "--get", "commit.template"],
+        true,
+      ).pipe(Effect.map((stdout) => stdout.trim()));
+      const commitMessageTemplate =
+        configuredTemplatePath.length === 0
+          ? undefined
+          : yield* fileSystem
+              .readFileString(
+                path.isAbsolute(configuredTemplatePath)
+                  ? configuredTemplatePath
+                  : path.resolve(cwd, configuredTemplatePath),
+              )
+              .pipe(
+                Effect.orElseSucceed(() => ""),
+                Effect.map((template) => template.trim() || undefined),
+              );
 
       return {
         stagedSummary,
         stagedPatch,
+        ...(commitMessageTemplate ? { commitMessageTemplate } : {}),
       };
     });
 

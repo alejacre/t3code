@@ -529,6 +529,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         branch: input.branch,
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
+        commitMessageTemplate: input.commitMessageTemplate,
         includeBranch: input.includeBranch === true,
         policy: input.policy,
       });

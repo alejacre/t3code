@@ -66,6 +66,21 @@ describe("buildCommitMessagePrompt", () => {
     expect(result.prompt).toContain("Additional instructions:");
     expect(result.prompt).toContain("Use a terse repository-specific subject.");
   });
+
+  it("follows a repository commit template", () => {
+    const result = buildCommitMessagePrompt({
+      branch: "main",
+      stagedSummary: "M a.ts",
+      stagedPatch: "diff",
+      commitMessageTemplate: "# type(scope): summary\n\n### What\n\n### Testing",
+    });
+
+    expect(result.prompt).toContain("follow the repository commit template");
+    expect(result.prompt).toContain("Repository commit template:");
+    expect(result.prompt).toContain("### What");
+    expect(result.prompt).toContain("state 'Not run' otherwise");
+    expect(result.prompt).not.toContain("body can be empty string or short bullet points");
+  });
 });
 
 describe("buildPrContentPrompt", () => {

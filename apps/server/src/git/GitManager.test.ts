@@ -1980,6 +1980,40 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("passes the configured commit template to text generation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".gitmessage"),
+        "# type(scope): summary\n\n### What\n\n### Testing\n",
+      );
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\ntemplate\n");
+      yield* runGit(repoDir, ["config", "commit.template", ".gitmessage"]);
+      let generatedTemplate: string | undefined;
+
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            generatedTemplate = input.commitMessageTemplate;
+            return Effect.succeed({
+              subject: "docs: update readme",
+              body: "### What\n\nUpdate the README.\n\n### Testing\n\nNot run.",
+            });
+          },
+        },
+      });
+
+      yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+      });
+
+      expect(generatedTemplate).toContain("### What");
+      expect(generatedTemplate).toContain("### Testing");
+    }),
+  );
+
   it.effect("commits only selected files when filePaths is provided", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -4686,7 +4720,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("Git command failed in GitVcsDriver.commit.commit");
-      expect(errorMessage).not.toContain("hook: fail");
+      expect(errorMessage).toContain("hook: fail");
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

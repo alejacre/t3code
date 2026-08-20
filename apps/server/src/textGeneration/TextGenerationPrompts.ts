@@ -27,12 +27,22 @@ export interface CommitMessagePromptInput {
   branch: string | null;
   stagedSummary: string;
   stagedPatch: string;
+  commitMessageTemplate?: string | undefined;
   includeBranch?: boolean;
   policy?: TextGenerationPolicy | undefined;
 }
 
 export function buildCommitMessagePrompt(input: CommitMessagePromptInput) {
   const wantsBranch = input.includeBranch === true;
+  const commitMessageTemplate = input.commitMessageTemplate?.trim();
+  const templateRules = commitMessageTemplate
+    ? [
+        "- subject and body must follow the repository commit template",
+        "- treat commented template lines as instructions, not literal output",
+        "- fill required markdown sections with change-specific content",
+        "- never claim a check ran unless the staged context proves it; state 'Not run' otherwise",
+      ]
+    : ["- body can be empty string or short bullet points"];
 
   const prompt = [
     "You write concise git commit messages.",
@@ -41,12 +51,15 @@ export function buildCommitMessagePrompt(input: CommitMessagePromptInput) {
       : "Return a JSON object with keys: subject, body.",
     "Rules:",
     "- subject must be imperative, <= 72 chars, and no trailing period",
-    "- body can be empty string or short bullet points",
+    ...templateRules,
     ...(wantsBranch
       ? ["- branch must be a short semantic git branch fragment for this change"]
       : []),
     "- capture the primary user-visible or developer-visible change",
     ...policyInstruction(input.policy?.commitInstructions),
+    ...(commitMessageTemplate
+      ? ["", "Repository commit template:", limitSection(commitMessageTemplate, 8_000)]
+      : []),
     "",
     `Branch: ${input.branch ?? "(detached)"}`,
     "",

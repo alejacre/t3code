@@ -1499,6 +1499,22 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.include(status, "?? selected1.txt");
       }),
     );
+
+    it.effect("loads the configured commit message template", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* writeTextFile(cwd, ".gitmessage", "# type(scope): summary\n\n### Testing\n");
+        yield* writeTextFile(cwd, "a.txt", "a\n");
+        yield* git(cwd, ["config", "commit.template", ".gitmessage"]);
+
+        const context = yield* driver.prepareCommitContext(cwd);
+
+        assert.equal(context?.commitMessageTemplate, "# type(scope): summary\n\n### Testing");
+      }),
+    );
   });
 
   describe("remote operations", () => {

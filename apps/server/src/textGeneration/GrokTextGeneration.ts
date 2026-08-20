@@ -163,6 +163,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         branch: input.branch,
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
+        commitMessageTemplate: input.commitMessageTemplate,
         includeBranch: input.includeBranch === true,
         policy: input.policy,
       });

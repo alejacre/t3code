@@ -307,6 +307,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         branch: input.branch,
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
+        commitMessageTemplate: input.commitMessageTemplate,
         includeBranch: input.includeBranch === true,
         policy: input.policy,
       });
