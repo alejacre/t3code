@@ -144,6 +144,22 @@ it.effect("falls back to Node when the native index is incompatible", () =>
   }),
 );
 
+it.effect("falls back to Node when the native module cannot load", () =>
+  Effect.gen(function* () {
+    const cwd = yield* Effect.promise(temporaryWorkspace);
+    yield* Effect.promise(() => writeFile(join(cwd, "fallback.txt"), "fallback"));
+
+    const searchIndex = yield* WorkspaceSearchIndex.make(cwd, "paths", {
+      loadFileFinderModule: async () => {
+        throw new Error("undefined symbol: memfd_create");
+      },
+    });
+    const listed = yield* searchIndex.list();
+
+    expect(listed.entries).toEqual([{ kind: "file", path: "fallback.txt" }]);
+  }),
+);
+
 it.effect("refreshes the Node fallback and reports content search as unavailable", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(temporaryWorkspace);

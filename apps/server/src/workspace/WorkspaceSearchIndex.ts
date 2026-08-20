@@ -3,16 +3,16 @@ import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import {
-  type DirItem,
-  type DirSearchResult,
-  type FileItem,
+import type {
+  DirItem,
+  DirSearchResult,
+  FileItem,
   FileFinder,
-  type GrepCursor,
-  type MixedItem,
-  type MixedSearchResult,
-  type Result as FinderResult,
-  type SearchResult,
+  GrepCursor,
+  MixedItem,
+  MixedSearchResult,
+  Result as FinderResult,
+  SearchResult,
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -45,6 +45,15 @@ const NATIVE_COMPATIBILITY_ERROR_PATTERNS = [
   "undefined symbol: memfd_create",
   "ERR_DLOPEN_FAILED",
 ] as const;
+
+type FileFinderModule = Pick<typeof import("@ff-labs/fff-node"), "FileFinder">;
+type FileFinderModuleLoader = () => Promise<FileFinderModule>;
+
+export interface WorkspaceSearchIndexMakeOptions {
+  readonly loadFileFinderModule?: FileFinderModuleLoader;
+}
+
+const loadFileFinderModule: FileFinderModuleLoader = () => import("@ff-labs/fff-node");
 
 export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
@@ -496,10 +505,20 @@ const makeFallback = Effect.fn("WorkspaceSearchIndex.makeFallback")(function* (
 const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
+  loadModule: FileFinderModuleLoader,
 ) {
+  const fileFinderModule = yield* Effect.tryPromise({
+    try: loadModule,
+    catch: (cause) =>
+      new WorkspaceSearchIndexCreateFailed({
+        cwd,
+        reason: "Failed to load the native FileFinder module.",
+        cause,
+      }),
+  });
   const result = yield* Effect.try({
     try: () =>
-      FileFinder.create({
+      fileFinderModule.FileFinder.create({
         basePath: cwd,
         disableMmapCache: true,
         // Content indexing costs scan CPU and memory, so only the on-demand
@@ -551,8 +570,11 @@ const waitForIndexReady = Effect.fn("WorkspaceSearchIndex.waitForIndexReady")(fu
 export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant = "paths",
+  options: WorkspaceSearchIndexMakeOptions = {},
 ) {
-  const finderResult = yield* Effect.result(createFinder(cwd, variant));
+  const finderResult = yield* Effect.result(
+    createFinder(cwd, variant, options.loadFileFinderModule ?? loadFileFinderModule),
+  );
   if (
     Result.isFailure(finderResult) &&
     finderResult.failure.cause !== undefined &&
