@@ -1,4 +1,4 @@
-import type { Session } from "electron";
+import type { CookiesSetDetails, Session } from "electron";
 import { session } from "electron";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -103,6 +103,9 @@ export class BrowserSession extends Context.Service<
     readonly isPartition: (partition: string) => boolean;
     readonly getSession: (scope?: string) => Effect.Effect<Session, BrowserSessionGetSessionError>;
     readonly clearCookies: () => Effect.Effect<void, BrowserSessionStorageClearError>;
+    readonly importCookies: (
+      cookies: ReadonlyArray<CookiesSetDetails>,
+    ) => Effect.Effect<number, BrowserSessionStorageClearError>;
     readonly clearCache: () => Effect.Effect<void, BrowserSessionCacheClearError>;
   }
 >()("@t3tools/desktop/preview/BrowserSession") {}
@@ -110,6 +113,7 @@ export class BrowserSession extends Context.Service<
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
   const sessionsRef = yield* SynchronizedRef.make<ReadonlyMap<string, Session>>(new Map());
+  const importedCookiesRef = yield* SynchronizedRef.make<ReadonlyArray<CookiesSetDetails>>([]);
 
   const getPartition = Effect.fn("BrowserSession.getPartition")(function* (scope = "shared") {
     const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(scope)).pipe(
@@ -126,11 +130,12 @@ export const make = Effect.gen(function* BrowserSessionMake() {
 
   const getSession = Effect.fn("BrowserSession.getSession")(function* (scope = "shared") {
     const partition = yield* getPartition(scope);
+    const importedCookies = yield* SynchronizedRef.get(importedCookiesRef);
     return yield* SynchronizedRef.modifyEffect(sessionsRef, (sessions) => {
       const existing = sessions.get(partition);
       if (existing) return Effect.succeed([existing, sessions] as const);
-      return Effect.try({
-        try: () => {
+      return Effect.tryPromise({
+        try: async () => {
           const browserSession = session.fromPartition(partition);
           const userAgent = browserSession
             .getUserAgent()
@@ -143,6 +148,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
           browserSession.setPermissionCheckHandler((_webContents, permission) =>
             ALLOWED_PREVIEW_PERMISSIONS.has(permission),
           );
+          await Promise.all(importedCookies.map((cookie) => browserSession.cookies.set(cookie)));
           const next = new Map(sessions);
           next.set(partition, browserSession);
           return [browserSession, next] as const;
@@ -179,6 +185,26 @@ export const make = Effect.gen(function* BrowserSessionMake() {
         ),
         { concurrency: "unbounded", discard: true },
       );
+    }),
+    importCookies: Effect.fn("BrowserSession.importCookies")(function* (cookies) {
+      yield* SynchronizedRef.set(importedCookiesRef, cookies);
+      const sessions = yield* SynchronizedRef.get(sessionsRef);
+      yield* Effect.all(
+        [...sessions.entries()].flatMap(([partition, browserSession]) =>
+          cookies.map((cookie) =>
+            Effect.tryPromise({
+              try: () => browserSession.cookies.set(cookie),
+              catch: (cause) =>
+                new BrowserSessionStorageClearError({
+                  partition,
+                  cause,
+                }),
+            }),
+          ),
+        ),
+        { concurrency: 8, discard: true },
+      );
+      return cookies.length;
     }),
     clearCache: Effect.fn("BrowserSession.clearCache")(function* () {
       const sessions = yield* SynchronizedRef.get(sessionsRef);

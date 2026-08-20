@@ -65,7 +65,7 @@ const DEFAULT_SERVICE_TIER_ID = "default";
 const CURRENT_CODEX_MODELS = new Set(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
 
 export function isLegacyCodexModel(model: string): boolean {
-  return !CURRENT_CODEX_MODELS.has(model);
+  return !CURRENT_CODEX_MODELS.has(model.replace(/^openai\./, ""));
 }
 
 function reasoningEffortLabel(reasoningEffort: string): string {

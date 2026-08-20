@@ -344,6 +344,22 @@ export function makeStaticProviderMaintenanceResolver(
   };
 }
 
+export function makeToolboxProviderMaintenanceResolver(input: {
+  readonly provider: ProviderDriverKind;
+  readonly executable: string;
+  readonly toolName: string;
+}): ProviderMaintenanceCapabilitiesResolver {
+  return makeStaticProviderMaintenanceResolver(
+    makeProviderMaintenanceCapabilities({
+      provider: input.provider,
+      packageName: null,
+      updateExecutable: input.executable,
+      updateArgs: ["update", input.toolName, "--force"],
+      updateLockKey: `toolbox-${input.toolName}`,
+    }),
+  );
+}
+
 function makeManualProviderMaintenanceCapabilities(
   provider: ProviderDriverKind,
 ): ProviderMaintenanceCapabilities {

@@ -6,16 +6,24 @@ import {
   mapCodexModelCapabilities,
 } from "./CodexProvider.ts";
 
-it("keeps only the GPT-5.6 Codex family out of legacy models", () => {
+it("keeps direct and Bedrock-qualified GPT-5.6 Codex models out of legacy models", () => {
   assert.deepStrictEqual(
-    ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4"].map((model) => [
-      model,
-      isLegacyCodexModel(model),
-    ]),
+    [
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "openai.gpt-5.6-luna",
+      "openai.gpt-5.6-terra",
+      "openai.gpt-5.6-sol",
+      "gpt-5.4",
+    ].map((model) => [model, isLegacyCodexModel(model)]),
     [
       ["gpt-5.6-luna", false],
       ["gpt-5.6-terra", false],
       ["gpt-5.6-sol", false],
+      ["openai.gpt-5.6-luna", false],
+      ["openai.gpt-5.6-terra", false],
+      ["openai.gpt-5.6-sol", false],
       ["gpt-5.4", true],
     ],
   );

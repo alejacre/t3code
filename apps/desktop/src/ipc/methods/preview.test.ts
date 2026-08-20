@@ -37,6 +37,10 @@ describe("preview IPC methods", () => {
     expect(fromPartition).not.toHaveBeenCalled();
   });
 
+  it("registers the Chrome authentication import handler", () => {
+    expect(PreviewIpc.methods).toContain(PreviewIpc.importChromeCookies);
+  });
+
   effectIt.effect("rejects invalid webContents ids before resolving the preview service", () =>
     Effect.map(
       PreviewIpc.registerWebview

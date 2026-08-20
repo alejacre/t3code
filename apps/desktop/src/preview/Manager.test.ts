@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import * as ChromeCookieImporter from "./ChromeCookieImporter.ts";
 import * as PreviewManager from "./Manager.ts";
 
 describe("fitPictureInPictureContentSize", () => {
@@ -107,7 +108,15 @@ const browserSessionLayer = Layer.succeed(
     isPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
     getSession: () => Effect.die("unexpected getSession"),
     clearCookies: () => Effect.void,
+    importCookies: () => Effect.succeed(0),
     clearCache: () => Effect.void,
+  }),
+);
+
+const chromeCookieImporterLayer = Layer.succeed(
+  ChromeCookieImporter.ChromeCookieImporter,
+  ChromeCookieImporter.ChromeCookieImporter.of({
+    importLastUsedProfile: () => Effect.succeed({ profileName: "Default", cookies: [] }),
   }),
 );
 
@@ -135,6 +144,7 @@ const fileSystemLayer = FileSystem.layerNoop({
 
 const layer = PreviewManager.layer.pipe(
   Layer.provideMerge(browserSessionLayer),
+  Layer.provideMerge(chromeCookieImporterLayer),
   Layer.provideMerge(environmentLayer),
   Layer.provideMerge(fileSystemLayer),
   Layer.provideMerge(Path.layer),

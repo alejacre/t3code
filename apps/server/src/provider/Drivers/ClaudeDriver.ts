@@ -13,6 +13,7 @@
  * @module provider/Drivers/ClaudeDriver
  */
 import { ClaudeSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import * as NodeOS from "node:os";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
@@ -45,8 +46,7 @@ import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  makePackageManagedProviderMaintenanceResolver,
-  normalizeCommandPath,
+  makeToolboxProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -60,25 +60,10 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 
-function isClaudeNativeCommandPath(commandPath: string): boolean {
-  const normalized = normalizeCommandPath(commandPath);
-  return (
-    normalized.endsWith("/.local/bin/claude") ||
-    normalized.endsWith("/.local/bin/claude.exe") ||
-    normalized.includes("/.local/share/claude/")
-  );
-}
-
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
+const UPDATE = makeToolboxProviderMaintenanceResolver({
   provider: DRIVER_KIND,
-  npmPackageName: "@anthropic-ai/claude-code",
-  homebrewFormula: "claude-code",
-  nativeUpdate: {
-    executable: "claude",
-    args: ["update"],
-    lockKey: "claude-native",
-    isCommandPath: isClaudeNativeCommandPath,
-  },
+  executable: `${NodeOS.homedir()}/.toolbox/bin/toolbox`,
+  toolName: "claude-code",
 });
 
 export type ClaudeDriverEnv =

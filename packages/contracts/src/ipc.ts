@@ -1007,6 +1007,13 @@ export const DesktopPreviewConfigInputSchema = Schema.Struct({
   environmentId: EnvironmentId,
 });
 
+export const DesktopPreviewChromeCookieImportResultSchema = Schema.Struct({
+  profileName: Schema.String,
+  importedCount: Schema.Int,
+});
+export type DesktopPreviewChromeCookieImportResult =
+  typeof DesktopPreviewChromeCookieImportResultSchema.Type;
+
 export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   colorScheme: DesktopPreviewColorSchemeSchema,
@@ -1178,6 +1185,8 @@ export interface DesktopPreviewBridge {
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
   clearCookies: () => Promise<void>;
+  /** Import Amazon-internal authentication cookies from Chrome's last-used macOS profile. */
+  importChromeCookies: () => Promise<DesktopPreviewChromeCookieImportResult>;
   /** Drop the HTTP cache for the preview partition (all tabs). */
   clearCache: () => Promise<void>;
   /**

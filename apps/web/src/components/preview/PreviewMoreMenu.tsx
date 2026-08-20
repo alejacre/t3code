@@ -1,7 +1,8 @@
 "use client";
 
 import type { DesktopPreviewColorScheme } from "@t3tools/contracts";
-import { Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import { CookieIcon, Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -17,6 +18,7 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 
 import { previewBridge } from "./previewBridge";
 
@@ -69,6 +71,7 @@ export function PreviewMoreMenu({
 }: Props) {
   if (!previewBridge) return null;
   const bridge = previewBridge;
+  const [importingChromeCookies, setImportingChromeCookies] = useState(false);
   const tabDisabled = !tabId || !hasWebContents;
   const callTab = (op: (tabId: string) => Promise<void>) => () => {
     if (!tabId) return;
@@ -76,6 +79,31 @@ export function PreviewMoreMenu({
   };
 
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
+  const importChromeCookies = () => {
+    if (importingChromeCookies) return;
+    setImportingChromeCookies(true);
+    void bridge
+      .importChromeCookies()
+      .then(({ importedCount, profileName }) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: "Chrome authentication imported",
+            description: `${importedCount} Amazon cookies copied from ${profileName}.`,
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not import Chrome authentication",
+            description: error instanceof Error ? error.message : "Cookie import failed.",
+          }),
+        );
+      })
+      .finally(() => setImportingChromeCookies(false));
+  };
   return (
     <Menu>
       <Tooltip>
@@ -177,6 +205,10 @@ export function PreviewMoreMenu({
           </span>
         </MenuItem>
         <MenuSeparator />
+        <MenuItem onClick={importChromeCookies} disabled={importingChromeCookies}>
+          <CookieIcon />
+          {importingChromeCookies ? "Importing Chrome auth…" : "Import Amazon auth from Chrome"}
+        </MenuItem>
         <MenuItem onClick={() => void bridge.clearCookies().catch(() => undefined)}>
           Clear cookies
         </MenuItem>

@@ -15,6 +15,7 @@ import {
   makePackageManagedProviderMaintenanceResolver,
   makeProviderMaintenanceCapabilities,
   makeStaticProviderMaintenanceResolver,
+  makeToolboxProviderMaintenanceResolver,
   normalizeCommandPath,
   ProviderVersionCache,
   resolveLatestProviderVersion,
@@ -68,6 +69,11 @@ const staticToolUpdate = makeStaticProviderMaintenanceResolver(
     updateLockKey: "static-tool",
   }),
 );
+const toolboxToolUpdate = makeToolboxProviderMaintenanceResolver({
+  provider: driver("toolboxTool"),
+  executable: "/home/test/.toolbox/bin/toolbox",
+  toolName: "toolbox-tool",
+});
 const installedPackageToolProvider: ServerProvider = {
   instanceId: ProviderInstanceId.make("packageTool"),
   driver: driver("packageTool"),
@@ -195,6 +201,19 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
         args: ["update"],
 
         lockKey: "static-tool",
+      },
+    });
+  });
+
+  it("uses Builder Toolbox without consulting a public package registry", () => {
+    expect(toolboxToolUpdate.resolve()).toEqual({
+      provider: driver("toolboxTool"),
+      packageName: null,
+      update: {
+        command: "/home/test/.toolbox/bin/toolbox update toolbox-tool --force",
+        executable: "/home/test/.toolbox/bin/toolbox",
+        args: ["update", "toolbox-tool", "--force"],
+        lockKey: "toolbox-toolbox-tool",
       },
     });
   });

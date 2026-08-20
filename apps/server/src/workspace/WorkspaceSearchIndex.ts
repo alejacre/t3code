@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - Compatibility fallback must run without adding platform services to the index contract.
+import { execFile } from "node:child_process";
+import { readdir } from "node:fs/promises";
+import { promisify } from "node:util";
+
 import {
   type DirItem,
   type DirSearchResult,
@@ -6,13 +11,14 @@ import {
   type GrepCursor,
   type MixedItem,
   type MixedSearchResult,
-  type Result,
+  type Result as FinderResult,
   type SearchResult,
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -32,6 +38,13 @@ const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
 const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
+const execFileAsync = promisify(execFile);
+const FALLBACK_SKIPPED_DIRECTORIES = new Set([".git", "node_modules"]);
+const NATIVE_COMPATIBILITY_ERROR_PATTERNS = [
+  "GLIBC_",
+  "undefined symbol: memfd_create",
+  "ERR_DLOPEN_FAILED",
+] as const;
 
 export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
@@ -297,6 +310,189 @@ function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEn
   return [...entryByPath.values()];
 }
 
+function isNativeCompatibilityError(cause: unknown): boolean {
+  const visited = new Set<unknown>();
+  let current: unknown = cause;
+  while (current !== undefined && current !== null && !visited.has(current)) {
+    visited.add(current);
+    const message =
+      current instanceof Error
+        ? `${current.name}: ${current.message} ${
+            "code" in current ? String((current as Error & { readonly code?: unknown }).code) : ""
+          }`
+        : typeof current === "string"
+          ? current
+          : "";
+    if (NATIVE_COMPATIBILITY_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
+      return true;
+    }
+    current =
+      typeof current === "object" && "cause" in current
+        ? (current as { readonly cause?: unknown }).cause
+        : undefined;
+  }
+  return false;
+}
+
+function parseNullSeparatedPaths(output: string): string[] {
+  return output
+    .split("\0")
+    .map(trimDirectorySeparator)
+    .filter((path) => path.length > 0);
+}
+
+async function listGitFiles(cwd: string): Promise<string[] | null> {
+  try {
+    await execFileAsync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"], {
+      encoding: "utf8",
+    });
+  } catch {
+    return null;
+  }
+
+  const options = { encoding: "utf8" as const, maxBuffer: 64 * 1024 * 1024 };
+  const [{ stdout: filesOutput }, { stdout: ignoredTrackedOutput }] = await Promise.all([
+    execFileAsync(
+      "git",
+      ["-C", cwd, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      options,
+    ),
+    execFileAsync(
+      "git",
+      ["-C", cwd, "ls-files", "--cached", "--ignored", "--exclude-standard", "-z"],
+      options,
+    ),
+  ]);
+  const ignoredTracked = new Set(parseNullSeparatedPaths(ignoredTrackedOutput));
+  return parseNullSeparatedPaths(filesOutput).filter((path) => !ignoredTracked.has(path));
+}
+
+async function listFilesystemEntries(cwd: string): Promise<ProjectEntry[]> {
+  const entries: ProjectEntry[] = [];
+
+  const visit = async (absoluteDirectory: string, relativeDirectory: string): Promise<void> => {
+    const children = await readdir(absoluteDirectory, { withFileTypes: true });
+    children.sort((left, right) => left.name.localeCompare(right.name));
+    for (const child of children) {
+      if (entries.length > WORKSPACE_INDEX_MAX_ENTRIES) return;
+      const relativePath = toPosixPath(
+        relativeDirectory ? `${relativeDirectory}/${child.name}` : child.name,
+      );
+      if (child.isDirectory()) {
+        if (FALLBACK_SKIPPED_DIRECTORIES.has(child.name)) continue;
+        entries.push({ path: relativePath, kind: "directory" });
+        await visit(`${absoluteDirectory}/${child.name}`, relativePath);
+      } else if (child.isFile()) {
+        entries.push({ path: relativePath, kind: "file" });
+      }
+    }
+  };
+
+  await visit(cwd, "");
+  return entries;
+}
+
+async function scanFallbackEntries(cwd: string): Promise<ProjectEntry[]> {
+  const gitFiles = await listGitFiles(cwd);
+  if (gitFiles === null) return listFilesystemEntries(cwd);
+  return withDirectoryAncestors(
+    gitFiles.map((path) => ({ path: toPosixPath(path), kind: "file" as const })),
+  );
+}
+
+function isSubsequence(query: string, candidate: string): boolean {
+  let queryIndex = 0;
+  for (const character of candidate) {
+    if (character === query[queryIndex]) queryIndex += 1;
+    if (queryIndex === query.length) return true;
+  }
+  return query.length === 0;
+}
+
+function fallbackPathRank(query: string, path: string): number | null {
+  if (!query) return 0;
+  const normalizedPath = path.toLocaleLowerCase();
+  const substringIndex = normalizedPath.indexOf(query);
+  if (substringIndex !== -1) return substringIndex;
+  return isSubsequence(query, normalizedPath) ? normalizedPath.length + 1_000 : null;
+}
+
+const makeFallback = Effect.fn("WorkspaceSearchIndex.makeFallback")(function* (
+  cwd: string,
+  variant: WorkspaceSearchIndexVariant,
+) {
+  let entries = yield* Effect.tryPromise({
+    try: () => scanFallbackEntries(cwd),
+    catch: (cause) =>
+      new WorkspaceSearchIndexCreateFailed({
+        cwd,
+        reason: "Node fallback failed to scan the workspace.",
+        cause,
+      }),
+  });
+
+  const list: WorkspaceSearchIndex["Service"]["list"] = () =>
+    Effect.sync(() => {
+      const sortedEntries = entries.toSorted((left, right) => left.path.localeCompare(right.path));
+      return {
+        entries: sortedEntries.slice(0, WORKSPACE_INDEX_MAX_ENTRIES),
+        truncated: sortedEntries.length > WORKSPACE_INDEX_MAX_ENTRIES,
+      };
+    });
+
+  const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(
+    "WorkspaceSearchIndex.fallbackSearch",
+  )(function* (query, limit, kind, imageOnly) {
+    const normalizedQuery = query.toLocaleLowerCase();
+    const matches = entries
+      .flatMap((entry) => {
+        if (!imageOnly && kind !== undefined && entry.kind !== kind) return [];
+        if (imageOnly && (entry.kind !== "file" || !isWorkspaceImagePreviewPath(entry.path))) {
+          return [];
+        }
+        const rank = fallbackPathRank(normalizedQuery, entry.path);
+        return rank === null ? [] : [{ entry, rank }];
+      })
+      .toSorted(
+        (left, right) => left.rank - right.rank || left.entry.path.localeCompare(right.entry.path),
+      );
+    return {
+      entries: matches.slice(0, limit).map(({ entry }) => entry),
+      truncated: matches.length > limit,
+    };
+  });
+
+  const searchContents: WorkspaceSearchIndex["Service"]["searchContents"] = Effect.fn(
+    "WorkspaceSearchIndex.fallbackSearchContents",
+  )(function* (input) {
+    return yield* new WorkspaceSearchIndexSearchFailed({
+      cwd,
+      queryLength: input.query.length,
+      pageSize: input.limit,
+      reason:
+        variant === "content"
+          ? "Content search is unavailable because the native workspace index is incompatible with this system."
+          : "Content search is unavailable in the path-only workspace index.",
+    });
+  });
+
+  const refresh: WorkspaceSearchIndex["Service"]["refresh"] = Effect.fn(
+    "WorkspaceSearchIndex.fallbackRefresh",
+  )(function* () {
+    entries = yield* Effect.tryPromise({
+      try: () => scanFallbackEntries(cwd),
+      catch: (cause) =>
+        new WorkspaceSearchIndexRefreshFailed({
+          cwd,
+          reason: "Node fallback failed to refresh the workspace.",
+          cause,
+        }),
+    });
+  });
+
+  return WorkspaceSearchIndex.of({ list, refresh, search, searchContents });
+});
+
 const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
@@ -356,7 +552,19 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant = "paths",
 ) {
-  const finder = yield* Effect.acquireRelease(createFinder(cwd, variant), (finder) =>
+  const finderResult = yield* Effect.result(createFinder(cwd, variant));
+  if (
+    Result.isFailure(finderResult) &&
+    finderResult.failure.cause !== undefined &&
+    isNativeCompatibilityError(finderResult.failure.cause)
+  ) {
+    return yield* makeFallback(cwd, variant);
+  }
+  if (Result.isFailure(finderResult)) {
+    return yield* finderResult.failure;
+  }
+
+  const finder = yield* Effect.acquireRelease(Effect.succeed(finderResult.success), (finder) =>
     Effect.try({
       try: () => finder.destroy(),
       catch: (cause) => new WorkspaceSearchIndexDestroyFailed({ cwd, cause }),
@@ -377,7 +585,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     query: string,
     pageSize: number,
     operation: "directorySearch" | "fileSearch" | "grep" | "mixedSearch",
-    execute: () => Result<A>,
+    execute: () => FinderResult<A>,
   ): Effect.fn.Return<A, WorkspaceSearchIndexSearchFailed> {
     const result = yield* Effect.try({
       try: execute,

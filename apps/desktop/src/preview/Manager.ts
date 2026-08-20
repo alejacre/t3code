@@ -53,6 +53,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import * as ChromeCookieImporter from "./ChromeCookieImporter.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_THEME_CHANNEL,
@@ -4064,6 +4065,10 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
+    readonly importChromeCookies: () => Effect.Effect<
+      { readonly profileName: string; readonly importedCount: number },
+      PreviewManagerError
+    >;
     readonly clearCache: () => Effect.Effect<void, PreviewManagerError>;
     readonly getBrowserPartition: (scope?: string) => Effect.Effect<string, PreviewManagerError>;
     readonly setAnnotationTheme: (
@@ -4130,6 +4135,7 @@ export class PreviewManager extends Context.Service<
 export const make = Effect.gen(function* PreviewManagerMake() {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const browserSession = yield* BrowserSession.BrowserSession;
+  const chromeCookieImporter = yield* ChromeCookieImporter.ChromeCookieImporter;
   const operations = yield* makeNativeOperations(
     environment.browserArtifactsDir,
     environment.path.join(environment.dirname, "preview-pip-preload.cjs"),
@@ -4170,6 +4176,23 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             (cause) => new PreviewOperationError({ operation: "clearCookies", cause }),
           ),
         );
+    }),
+    importChromeCookies: Effect.fn("PreviewManager.importChromeCookies")(function* () {
+      const imported = yield* chromeCookieImporter
+        .importLastUsedProfile()
+        .pipe(
+          Effect.mapError(
+            (cause) => new PreviewOperationError({ operation: "importChromeCookies", cause }),
+          ),
+        );
+      const importedCount = yield* browserSession
+        .importCookies(imported.cookies)
+        .pipe(
+          Effect.mapError(
+            (cause) => new PreviewOperationError({ operation: "importChromeCookies", cause }),
+          ),
+        );
+      return { profileName: imported.profileName, importedCount };
     }),
     clearCache: Effect.fn("PreviewManager.clearCache")(function* () {
       yield* browserSession

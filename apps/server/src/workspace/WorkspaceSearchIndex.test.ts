@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Tests create real temporary filesystem layouts.
 import {
   FileFinder,
   type FileItem,
@@ -6,6 +7,11 @@ import {
   type GrepResult,
 } from "@ff-labs/fff-node";
 import { afterEach, expect, it } from "@effect/vitest";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -13,9 +19,25 @@ import { vi } from "vite-plus/test";
 
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
 
+const execFileAsync = promisify(execFile);
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
+  );
+});
+
+async function temporaryWorkspace(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "t3-workspace-index-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
 
 function fileItem(relativePath: string): FileItem {
   return {
@@ -82,6 +104,105 @@ it.effect("preserves unexpected FileFinder creation failures", () =>
       reason: "FileFinder.create threw unexpectedly.",
       cause,
     });
+  }),
+);
+
+it.effect("falls back to Node when the native index is incompatible", () =>
+  Effect.gen(function* () {
+    const cwd = yield* Effect.promise(temporaryWorkspace);
+    yield* Effect.promise(() => mkdir(join(cwd, "src", "nested"), { recursive: true }));
+    yield* Effect.promise(() => mkdir(join(cwd, ".git"), { recursive: true }));
+    yield* Effect.promise(() =>
+      mkdir(join(cwd, "node_modules", "dependency"), { recursive: true }),
+    );
+    yield* Effect.promise(() => writeFile(join(cwd, "README.md"), "readme"));
+    yield* Effect.promise(() => writeFile(join(cwd, "src", "nested", "SearchIndex.ts"), "code"));
+    yield* Effect.promise(() => writeFile(join(cwd, ".git", "config"), "ignored"));
+    yield* Effect.promise(() =>
+      writeFile(join(cwd, "node_modules", "dependency", "index.js"), "ignored"),
+    );
+    vi.spyOn(FileFinder, "create").mockImplementationOnce(() => {
+      throw new Error(
+        "libfff_c.so: version `GLIBC_2.29' not found (required by ffi-rs.linux-x64-gnu.node)",
+      );
+    });
+
+    const searchIndex = yield* WorkspaceSearchIndex.make(cwd);
+    const listed = yield* searchIndex.list();
+    const searched = yield* searchIndex.search("sit", 10);
+
+    expect(listed).toEqual({
+      entries: [
+        { kind: "file", path: "README.md" },
+        { kind: "directory", path: "src" },
+        { kind: "directory", path: "src/nested" },
+        { kind: "file", path: "src/nested/SearchIndex.ts" },
+      ],
+      truncated: false,
+    });
+    expect(searched.entries).toEqual([{ kind: "file", path: "src/nested/SearchIndex.ts" }]);
+  }),
+);
+
+it.effect("refreshes the Node fallback and reports content search as unavailable", () =>
+  Effect.gen(function* () {
+    const cwd = yield* Effect.promise(temporaryWorkspace);
+    yield* Effect.promise(() => writeFile(join(cwd, "before.txt"), "before"));
+    vi.spyOn(FileFinder, "create").mockImplementationOnce(() => {
+      const error = new Error("native module failed");
+      Object.assign(error, { code: "ERR_DLOPEN_FAILED" });
+      throw error;
+    });
+
+    const searchIndex = yield* WorkspaceSearchIndex.make(cwd, "content");
+    yield* Effect.promise(() => writeFile(join(cwd, "after.txt"), "after"));
+    yield* searchIndex.refresh();
+    const listed = yield* searchIndex.list();
+    const contentError = yield* Effect.flip(
+      searchIndex.searchContents({
+        query: "after",
+        limit: 10,
+        caseSensitive: false,
+        wholeWord: false,
+        useRegex: false,
+      }),
+    );
+
+    expect(listed.entries).toEqual([
+      { kind: "file", path: "after.txt" },
+      { kind: "file", path: "before.txt" },
+    ]);
+    expect(contentError).toMatchObject({
+      _tag: "WorkspaceSearchIndexSearchFailed",
+      reason:
+        "Content search is unavailable because the native workspace index is incompatible with this system.",
+    });
+  }),
+);
+
+it.effect("uses Git files for the fallback and excludes ignored entries", () =>
+  Effect.gen(function* () {
+    const cwd = yield* Effect.promise(temporaryWorkspace);
+    yield* Effect.promise(() => execFileAsync("git", ["init", cwd]));
+    yield* Effect.promise(() => writeFile(join(cwd, ".gitignore"), "ignored.txt\n"));
+    yield* Effect.promise(() => writeFile(join(cwd, "tracked.txt"), "tracked"));
+    yield* Effect.promise(() => writeFile(join(cwd, "untracked.txt"), "untracked"));
+    yield* Effect.promise(() => writeFile(join(cwd, "ignored.txt"), "ignored"));
+    yield* Effect.promise(() =>
+      execFileAsync("git", ["-C", cwd, "add", ".gitignore", "tracked.txt"]),
+    );
+    vi.spyOn(FileFinder, "create").mockImplementationOnce(() => {
+      throw new Error("undefined symbol: memfd_create");
+    });
+
+    const searchIndex = yield* WorkspaceSearchIndex.make(cwd);
+    const listed = yield* searchIndex.list();
+
+    expect(listed.entries).toEqual([
+      { kind: "file", path: ".gitignore" },
+      { kind: "file", path: "tracked.txt" },
+      { kind: "file", path: "untracked.txt" },
+    ]);
   }),
 );
 

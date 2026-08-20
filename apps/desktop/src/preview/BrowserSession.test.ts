@@ -13,6 +13,7 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
     {
       readonly clearCache: ReturnType<typeof vi.fn>;
       readonly clearStorageData: ReturnType<typeof vi.fn>;
+      readonly cookies: { readonly set: ReturnType<typeof vi.fn> };
       readonly getUserAgent: ReturnType<typeof vi.fn>;
       readonly setPermissionRequestHandler: ReturnType<typeof vi.fn>;
       readonly setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ describe("BrowserSession", () => {
       const browserSession = {
         clearCache: vi.fn(() => Promise.resolve()),
         clearStorageData: vi.fn(() => Promise.resolve()),
+        cookies: { set: vi.fn(() => Promise.resolve()) },
         getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/0.0.27"),
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
@@ -188,6 +190,31 @@ describe("BrowserSession", () => {
           },
         ]);
         assert.strictEqual(browserSession.clearCache.mock.calls.length, 1);
+      }
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("imports cookies into existing and subsequently-created sessions", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      yield* browserSessions.getSession("scope-a");
+      const importedCount = yield* browserSessions.importCookies([
+        {
+          url: "https://midway-auth.amazon.com/",
+          name: "midway",
+          value: "test",
+          domain: ".amazon.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+        },
+      ]);
+      yield* browserSessions.getSession("scope-b");
+
+      assert.equal(importedCount, 1);
+      for (const browserSession of sessions.values()) {
+        assert.equal(browserSession.cookies.set.mock.calls.length, 1);
+        assert.equal(browserSession.cookies.set.mock.calls[0]?.[0]?.name, "midway");
       }
     }).pipe(Effect.provide(layer)),
   );
