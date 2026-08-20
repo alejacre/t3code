@@ -89,6 +89,7 @@ export interface GitRemoteStatusDetails {
 export interface GitPreparedCommitContext {
   stagedSummary: string;
   stagedPatch: string;
+  commitMessageTemplate?: string | undefined;
 }
 
 export interface ExecuteGitProgress {

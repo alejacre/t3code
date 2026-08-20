@@ -1779,6 +1779,9 @@ export const make = Effect.gen(function* () {
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
+          ...(context.commitMessageTemplate
+            ? { commitMessageTemplate: limitContext(context.commitMessageTemplate, 8_000) }
+            : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
           ...(policy ? { policy } : {}),
           modelSelection: input.settings.modelSelection,
@@ -1844,6 +1847,7 @@ export const make = Effect.gen(function* () {
     });
 
     let currentHookName: string | null = null;
+    const commitOutputLines: string[] = [];
     const commitProgress =
       progressReporter && actionId
         ? {
@@ -1851,6 +1855,12 @@ export const make = Effect.gen(function* () {
               const sanitized = sanitizeProgressText(text);
               if (!sanitized) {
                 return Effect.void;
+              }
+              if (
+                commitOutputLines.length < 8 &&
+                commitOutputLines[commitOutputLines.length - 1] !== sanitized
+              ) {
+                commitOutputLines.push(sanitized);
               }
               return emit({
                 kind: "hook_output",
@@ -1887,10 +1897,31 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      ...(commitProgress ? { progress: commitProgress } : {}),
-    });
+    const { commitSha } = yield* gitCore
+      .commit(cwd, suggestion.subject, suggestion.body, {
+        timeoutMs: COMMIT_TIMEOUT_MS,
+        ...(commitProgress ? { progress: commitProgress } : {}),
+      })
+      .pipe(
+        Effect.mapError((error) =>
+          commitOutputLines.length === 0
+            ? error
+            : new GitCommandError({
+                operation: error.operation,
+                command: error.command,
+                cwd: error.cwd,
+                ...(error.argumentCount !== undefined
+                  ? { argumentCount: error.argumentCount }
+                  : {}),
+                ...(error.exitCode !== undefined ? { exitCode: error.exitCode } : {}),
+                ...(error.stdoutLength !== undefined ? { stdoutLength: error.stdoutLength } : {}),
+                ...(error.stderrLength !== undefined ? { stderrLength: error.stderrLength } : {}),
+                ...(error.outputLength !== undefined ? { outputLength: error.outputLength } : {}),
+                detail: `${error.detail} ${commitOutputLines.join(" ")}`,
+                cause: error,
+              }),
+        ),
+      );
     if (currentHookName !== null) {
       yield* emit({
         kind: "hook_finished",
