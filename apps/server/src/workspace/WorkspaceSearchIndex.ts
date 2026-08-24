@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Compatibility fallback must run without adding platform services to the index contract.
-import { execFile } from "node:child_process";
-import { readdir } from "node:fs/promises";
-import { promisify } from "node:util";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeUtil from "node:util";
 
 import type {
   DirItem,
@@ -38,7 +38,7 @@ const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
 const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
-const execFileAsync = promisify(execFile);
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 const FALLBACK_SKIPPED_DIRECTORIES = new Set([".git", "node_modules"]);
 const NATIVE_COMPATIBILITY_ERROR_PATTERNS = [
   "GLIBC_",
@@ -380,7 +380,7 @@ async function listFilesystemEntries(cwd: string): Promise<ProjectEntry[]> {
   const entries: ProjectEntry[] = [];
 
   const visit = async (absoluteDirectory: string, relativeDirectory: string): Promise<void> => {
-    const children = await readdir(absoluteDirectory, { withFileTypes: true });
+    const children = await NodeFSP.readdir(absoluteDirectory, { withFileTypes: true });
     children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
       if (entries.length > WORKSPACE_INDEX_MAX_ENTRIES) return;
@@ -451,24 +451,27 @@ const makeFallback = Effect.fn("WorkspaceSearchIndex.makeFallback")(function* (
 
   const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(
     "WorkspaceSearchIndex.fallbackSearch",
-  )(function* (query, limit, kind, imageOnly) {
-    const normalizedQuery = query.toLocaleLowerCase();
-    const matches = entries
-      .flatMap((entry) => {
-        if (!imageOnly && kind !== undefined && entry.kind !== kind) return [];
-        if (imageOnly && (entry.kind !== "file" || !isWorkspaceImagePreviewPath(entry.path))) {
-          return [];
-        }
-        const rank = fallbackPathRank(normalizedQuery, entry.path);
-        return rank === null ? [] : [{ entry, rank }];
-      })
-      .toSorted(
-        (left, right) => left.rank - right.rank || left.entry.path.localeCompare(right.entry.path),
-      );
-    return {
-      entries: matches.slice(0, limit).map(({ entry }) => entry),
-      truncated: matches.length > limit,
-    };
+  )(function (query, limit, kind, imageOnly) {
+    return Effect.sync(() => {
+      const normalizedQuery = query.toLocaleLowerCase();
+      const matches = entries
+        .flatMap((entry) => {
+          if (!imageOnly && kind !== undefined && entry.kind !== kind) return [];
+          if (imageOnly && (entry.kind !== "file" || !isWorkspaceImagePreviewPath(entry.path))) {
+            return [];
+          }
+          const rank = fallbackPathRank(normalizedQuery, entry.path);
+          return rank === null ? [] : [{ entry, rank }];
+        })
+        .toSorted(
+          (left, right) =>
+            left.rank - right.rank || left.entry.path.localeCompare(right.entry.path),
+        );
+      return {
+        entries: matches.slice(0, limit).map(({ entry }) => entry),
+        truncated: matches.length > limit,
+      };
+    });
   });
 
   const searchContents: WorkspaceSearchIndex["Service"]["searchContents"] = Effect.fn(

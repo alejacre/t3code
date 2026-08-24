@@ -1,7 +1,8 @@
-import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
-import { homedir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
+import * as NodeSqlite from "node:sqlite";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type { CookiesSetDetails } from "electron";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -11,7 +12,7 @@ import * as Schema from "effect/Schema";
 import * as String from "effect/String";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const CHROME_ROOT = `${homedir()}/Library/Application Support/Google/Chrome`;
+const CHROME_ROOT = `${NodeOS.homedir()}/Library/Application Support/Google/Chrome`;
 const CHROME_LOCAL_STATE = `${CHROME_ROOT}/Local State`;
 const CHROME_COOKIE_DOMAINS = [
   "amazon.com",
@@ -44,6 +45,9 @@ const ChromeCookieRow = Schema.Struct({
   has_expires: Schema.BigInt,
   samesite: Schema.BigInt,
 });
+
+const decodeChromeLocalState = Schema.decodeUnknownEffect(Schema.fromJsonString(ChromeLocalState));
+const decodeChromeCookieRow = Schema.decodeUnknownEffect(ChromeCookieRow);
 
 type ChromeCookieRow = typeof ChromeCookieRow.Type;
 
@@ -85,7 +89,7 @@ export function decryptChromeCookie(
   }
 
   try {
-    const decipher = createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
+    const decipher = NodeCrypto.createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
     const plaintext = Buffer.concat([
       decipher.update(encrypted.subarray(CHROME_ENCRYPTION_PREFIX.length)),
       decipher.final(),
@@ -93,7 +97,7 @@ export function decryptChromeCookie(
 
     if (databaseVersion < 24) return plaintext.toString("utf8");
     if (plaintext.length < CHROME_HOST_HASH_LENGTH) return null;
-    const expectedHostHash = createHash("sha256").update(row.host_key).digest();
+    const expectedHostHash = NodeCrypto.createHash("sha256").update(row.host_key).digest();
     if (!plaintext.subarray(0, CHROME_HOST_HASH_LENGTH).equals(expectedHostHash)) return null;
     return plaintext.subarray(CHROME_HOST_HASH_LENGTH).toString("utf8");
   } catch {
@@ -136,11 +140,12 @@ export class ChromeCookieImporter extends Context.Service<
 
 export const make = Effect.gen(function* ChromeCookieImporterMake() {
   const fileSystem = yield* FileSystem.FileSystem;
+  const platform = yield* HostProcessPlatform;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const importLastUsedProfile = Effect.fn("ChromeCookieImporter.importLastUsedProfile")(
     function* () {
-      if (process.platform !== "darwin") {
+      if (platform !== "darwin") {
         return yield* new ChromeCookieImportError({
           detail: "Chrome cookie import is currently available on macOS only.",
           cause: null,
@@ -148,7 +153,7 @@ export const make = Effect.gen(function* ChromeCookieImporterMake() {
       }
 
       const localState = yield* fileSystem.readFileString(CHROME_LOCAL_STATE).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ChromeLocalState))),
+        Effect.flatMap(decodeChromeLocalState),
         Effect.mapError(
           (cause) =>
             new ChromeCookieImportError({
@@ -192,12 +197,12 @@ export const make = Effect.gen(function* ChromeCookieImporterMake() {
               }),
           ),
         );
-      const key = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
+      const key = NodeCrypto.pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
       const cookieDatabasePath = `${CHROME_ROOT}/${profileId}/Cookies`;
 
       const cookieRows = yield* Effect.try({
         try: () => {
-          const database = new DatabaseSync(cookieDatabasePath, { readOnly: true });
+          const database = new NodeSqlite.DatabaseSync(cookieDatabasePath, { readOnly: true });
           try {
             const versionRow = database
               .prepare("SELECT value FROM meta WHERE key = 'version'")
@@ -231,7 +236,7 @@ export const make = Effect.gen(function* ChromeCookieImporterMake() {
       const cookies = yield* Effect.forEach(
         cookieRows.rows,
         (unknownRow) =>
-          Schema.decodeUnknownEffect(ChromeCookieRow)(unknownRow).pipe(
+          decodeChromeCookieRow(unknownRow).pipe(
             Effect.mapError(
               (cause) =>
                 new ChromeCookieImportError({

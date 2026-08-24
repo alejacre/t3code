@@ -7,11 +7,11 @@ import {
   type GrepResult,
 } from "@ff-labs/fff-node";
 import { afterEach, expect, it } from "@effect/vitest";
-import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -19,7 +19,7 @@ import { vi } from "vite-plus/test";
 
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -29,12 +29,12 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
+    temporaryDirectories.splice(0).map((directory) => NodeFSP.rm(directory, { recursive: true })),
   );
 });
 
 async function temporaryWorkspace(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "t3-workspace-index-"));
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-workspace-index-"));
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -110,16 +110,20 @@ it.effect("preserves unexpected FileFinder creation failures", () =>
 it.effect("falls back to Node when the native index is incompatible", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(temporaryWorkspace);
-    yield* Effect.promise(() => mkdir(join(cwd, "src", "nested"), { recursive: true }));
-    yield* Effect.promise(() => mkdir(join(cwd, ".git"), { recursive: true }));
     yield* Effect.promise(() =>
-      mkdir(join(cwd, "node_modules", "dependency"), { recursive: true }),
+      NodeFSP.mkdir(NodePath.join(cwd, "src", "nested"), { recursive: true }),
     );
-    yield* Effect.promise(() => writeFile(join(cwd, "README.md"), "readme"));
-    yield* Effect.promise(() => writeFile(join(cwd, "src", "nested", "SearchIndex.ts"), "code"));
-    yield* Effect.promise(() => writeFile(join(cwd, ".git", "config"), "ignored"));
+    yield* Effect.promise(() => NodeFSP.mkdir(NodePath.join(cwd, ".git"), { recursive: true }));
     yield* Effect.promise(() =>
-      writeFile(join(cwd, "node_modules", "dependency", "index.js"), "ignored"),
+      NodeFSP.mkdir(NodePath.join(cwd, "node_modules", "dependency"), { recursive: true }),
+    );
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "README.md"), "readme"));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(cwd, "src", "nested", "SearchIndex.ts"), "code"),
+    );
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, ".git", "config"), "ignored"));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(cwd, "node_modules", "dependency", "index.js"), "ignored"),
     );
     vi.spyOn(FileFinder, "create").mockImplementationOnce(() => {
       throw new Error(
@@ -147,7 +151,7 @@ it.effect("falls back to Node when the native index is incompatible", () =>
 it.effect("falls back to Node when the native module cannot load", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(temporaryWorkspace);
-    yield* Effect.promise(() => writeFile(join(cwd, "fallback.txt"), "fallback"));
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "fallback.txt"), "fallback"));
 
     const searchIndex = yield* WorkspaceSearchIndex.make(cwd, "paths", {
       loadFileFinderModule: async () => {
@@ -163,7 +167,7 @@ it.effect("falls back to Node when the native module cannot load", () =>
 it.effect("refreshes the Node fallback and reports content search as unavailable", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(temporaryWorkspace);
-    yield* Effect.promise(() => writeFile(join(cwd, "before.txt"), "before"));
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "before.txt"), "before"));
     vi.spyOn(FileFinder, "create").mockImplementationOnce(() => {
       const error = new Error("native module failed");
       Object.assign(error, { code: "ERR_DLOPEN_FAILED" });
@@ -171,7 +175,7 @@ it.effect("refreshes the Node fallback and reports content search as unavailable
     });
 
     const searchIndex = yield* WorkspaceSearchIndex.make(cwd, "content");
-    yield* Effect.promise(() => writeFile(join(cwd, "after.txt"), "after"));
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "after.txt"), "after"));
     yield* searchIndex.refresh();
     const listed = yield* searchIndex.list();
     const contentError = yield* Effect.flip(
@@ -200,10 +204,14 @@ it.effect("uses Git files for the fallback and excludes ignored entries", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(temporaryWorkspace);
     yield* Effect.promise(() => execFileAsync("git", ["init", cwd]));
-    yield* Effect.promise(() => writeFile(join(cwd, ".gitignore"), "ignored.txt\n"));
-    yield* Effect.promise(() => writeFile(join(cwd, "tracked.txt"), "tracked"));
-    yield* Effect.promise(() => writeFile(join(cwd, "untracked.txt"), "untracked"));
-    yield* Effect.promise(() => writeFile(join(cwd, "ignored.txt"), "ignored"));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(cwd, ".gitignore"), "ignored.txt\n"),
+    );
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "tracked.txt"), "tracked"));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(cwd, "untracked.txt"), "untracked"),
+    );
+    yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(cwd, "ignored.txt"), "ignored"));
     yield* Effect.promise(() =>
       execFileAsync("git", ["-C", cwd, "add", ".gitignore", "tracked.txt"]),
     );

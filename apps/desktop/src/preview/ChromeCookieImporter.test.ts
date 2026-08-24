@@ -1,11 +1,11 @@
-import { createCipheriv, createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
 
 import { decryptChromeCookie, toElectronCookie } from "./ChromeCookieImporter.ts";
 
 const encryptCookie = (plaintext: Buffer, key: Buffer): Uint8Array => {
-  const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
+  const cipher = NodeCrypto.createCipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
   return Buffer.concat([Buffer.from("v10"), cipher.update(plaintext), cipher.final()]);
 };
 
@@ -15,7 +15,7 @@ describe("ChromeCookieImporter", () => {
     const key = Buffer.from("0123456789abcdef");
     const value = "midway-cookie";
     const plaintext = Buffer.concat([
-      createHash("sha256").update(host).digest(),
+      NodeCrypto.createHash("sha256").update(host).digest(),
       Buffer.from(value),
     ]);
     const encryptedValue = encryptCookie(plaintext, key);
