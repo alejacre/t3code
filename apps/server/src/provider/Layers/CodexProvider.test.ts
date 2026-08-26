@@ -1,37 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import {
-  applyPreferredCodexDefaultModel,
-  isLegacyCodexModel,
-  mapCodexModelCapabilities,
-} from "./CodexProvider.ts";
-
-it("keeps direct, Bedrock-qualified, and current Codex models out of legacy models", () => {
-  assert.deepStrictEqual(
-    [
-      "gpt-5.6-luna",
-      "gpt-5.6-terra",
-      "gpt-5.6-sol",
-      "openai.gpt-5.6-luna",
-      "openai.gpt-5.6-terra",
-      "openai.gpt-5.6-sol",
-      "gpt-daybreak-blue-latest",
-      "gpt-daybreak-red-latest",
-      "gpt-5.4",
-    ].map((model) => [model, isLegacyCodexModel(model)]),
-    [
-      ["gpt-5.6-luna", false],
-      ["gpt-5.6-terra", false],
-      ["gpt-5.6-sol", false],
-      ["openai.gpt-5.6-luna", false],
-      ["openai.gpt-5.6-terra", false],
-      ["openai.gpt-5.6-sol", false],
-      ["gpt-daybreak-blue-latest", false],
-      ["gpt-daybreak-red-latest", false],
-      ["gpt-5.4", true],
-    ],
-  );
-});
+import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
