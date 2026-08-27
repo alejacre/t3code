@@ -47,7 +47,10 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
+  makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
+  type ProviderMaintenanceCapabilitiesResolver,
+  type ProviderMaintenanceCapabilityResolutionOptions,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -70,7 +73,7 @@ function isClaudeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
+const PUBLIC_UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@anthropic-ai/claude-code",
   homebrewFormula: "claude-code",
@@ -81,6 +84,33 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
     isCommandPath: isClaudeNativeCommandPath,
   },
 });
+
+function isClaudeToolboxCommandPath(commandPath: string): boolean {
+  const normalized = normalizeCommandPath(commandPath);
+  return normalized.includes("/.toolbox/") || normalized.endsWith("/toolbox-exec");
+}
+
+export function resolveClaudeMaintenanceCapabilities(
+  options?: ProviderMaintenanceCapabilityResolutionOptions,
+) {
+  const commandPaths = [options?.resolvedCommandPath, options?.realCommandPath].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (commandPaths.some(isClaudeToolboxCommandPath)) {
+    return makeProviderMaintenanceCapabilities({
+      provider: DRIVER_KIND,
+      packageName: null,
+      updateExecutable: "toolbox",
+      updateArgs: ["update", "claude-code"],
+      updateLockKey: "builder-toolbox",
+    });
+  }
+  return PUBLIC_UPDATE.resolve(options);
+}
+
+const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
+  resolve: resolveClaudeMaintenanceCapabilities,
+};
 
 export type ClaudeDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
