@@ -10,6 +10,14 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
+  it("exposes only Codex, Claude, and Kiro provider definitions", () => {
+    expect(Object.keys(DRIVER_OPTION_BY_VALUE).toSorted()).toEqual([
+      "claudeAgent",
+      "codex",
+      "kiro",
+    ]);
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 
@@ -23,17 +31,17 @@ describe("ProviderSettingsForm helpers", () => {
   });
 
   it("sources labels and descriptions from schema annotations", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
+    const kiro = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("kiro")];
+    expect(kiro).toBeDefined();
 
-    const serverPassword = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverPassword",
+    const agentEngine = deriveProviderSettingsFields(kiro!).find(
+      (field) => field.key === "agentEngine",
     );
 
-    expect(serverPassword).toMatchObject({
-      label: "Server password",
-      description: "Stored in plain text on disk.",
-      control: "password",
+    expect(agentEngine).toMatchObject({
+      label: "Agent engine",
+      description: "Kiro agent engine used for ACP sessions (v1, v2, or v3).",
+      control: "text",
     });
   });
 
@@ -61,17 +69,15 @@ describe("ProviderSettingsForm helpers", () => {
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
+    const kiro = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("kiro")];
+    expect(kiro).toBeDefined();
 
-    const serverUrl = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverUrl",
-    );
-    expect(serverUrl).toBeDefined();
+    const agent = deriveProviderSettingsFields(kiro!).find((field) => field.key === "agent");
+    expect(agent).toBeDefined();
 
     const next = nextProviderConfigWithFieldValue(
-      { forkOwned: 1, serverUrl: "http://127.0.0.1:4096" },
-      serverUrl!,
+      { forkOwned: 1, agent: "custom-agent" },
+      agent!,
       "",
     );
 

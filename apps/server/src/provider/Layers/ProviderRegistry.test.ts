@@ -1679,7 +1679,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               }),
             ),
           );
-          let cursorSpawned = false;
           let kiroSpawned = false;
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
@@ -1705,9 +1704,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             Layer.provideMerge(
               mockCommandSpawnerLayer((command, args) => {
-                if (command === "cursor-agent") {
-                  cursorSpawned = true;
-                }
                 if (command === "kiro-cli") {
                   kiroSpawned = true;
                 }
@@ -1740,9 +1736,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
             const providers = yield* registry.getProviders;
-            const cursorProvider = providers.find(
-              (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
-            );
             const kiroProvider = providers.find(
               (provider) => provider.instanceId === ProviderInstanceId.make("kiro"),
             );
@@ -1750,15 +1743,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
               "claudeAgent",
               "codex",
-              "cursor",
-              "grok",
               "kiro",
-              "opencode",
             ]);
-            assert.strictEqual(cursorProvider?.enabled, false);
-            assert.strictEqual(cursorProvider?.status, "disabled");
-            assert.strictEqual(cursorProvider?.message, "Cursor is disabled in T3 Code settings.");
-            assert.strictEqual(cursorSpawned, false);
             assert.strictEqual(kiroProvider?.enabled, false);
             assert.strictEqual(kiroProvider?.status, "disabled");
             assert.strictEqual(kiroProvider?.message, "Kiro is disabled in T3 Code settings.");

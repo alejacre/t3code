@@ -17,17 +17,13 @@ without prompting; commands and anything else still stop for approval.
 
 **Auto**: routine actions proceed without you; risky ones still ask. How this is enforced depends
 on the provider: Codex delegates routine approvals to an AI reviewer, Claude uses its own auto
-permission mode, and providers without an equivalent (such as OpenCode) fall back to asking, like
-Supervised.
+permission mode, and providers without an equivalent fall back to asking, like Supervised.
 
 **Full access**: allow commands and edits without prompts. The default. The agent runs
 unattended until it finishes or asks a question of its own.
 
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
-
-For Grok, **Always allow this session** remembers the matching command or tool input. Other
-actions still ask for approval. It does not change the thread to **Full access**.
 
 For Kiro, **Auto-accept edits** approves ACP file changes (`edit`, `delete`, and `move`) while
 commands continue to ask. Kiro does not expose a separate routine-action permission mode, so
@@ -47,9 +43,7 @@ shell commands.
 
 Each provider maps these modes onto its own approval and sandbox settings. Codex, for example,
 translates the mode into its approval policy and sandbox level, so **Supervised** runs the CLI
-with prompting enabled and a restricted workspace while **Full access** disables both. Grok
-threads do the same: **Supervised** starts Grok in ask mode even if your Grok CLI config is
-set to always-approve, and **Full access** starts Grok with always-approve. The labels above
-describe what you get; the exact per-provider translation is internal and may change.
+with prompting enabled and a restricted workspace while **Full access** disables both. The labels
+above describe what you get; the exact per-provider translation is internal and may change.
 
 Mobile offers the same four modes with the same labels and descriptions.
