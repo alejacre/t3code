@@ -32,6 +32,7 @@ import {
   makeGrokAdapter,
   nextGrokPlanModeActive,
   selectGrokPermissionOptionId,
+  shouldAutoApproveAcpPermission,
 } from "./GrokAdapter.ts";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 
@@ -177,6 +178,37 @@ it("prefers allow_always when Grok offers it", () => {
 
   assert.equal(selectGrokPermissionOptionId(request, "acceptForSession"), "allow-always");
   assert.equal(selectGrokPermissionOptionId(request, "accept"), "allow-once");
+});
+
+it("auto-approves only file-changing ACP permissions in auto-accept-edits mode", () => {
+  assert.isTrue(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "edit",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isTrue(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "delete",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isFalse(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "execute",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isFalse(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto",
+      toolKind: "edit",
+      autoApproveEditPermissions: true,
+    }),
+  );
 });
 
 it("requires a settlement to match the live Grok turn", () => {

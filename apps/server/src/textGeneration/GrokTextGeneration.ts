@@ -36,10 +36,20 @@ const GROK_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
+export interface GrokTextGenerationOptions {
+  readonly providerLabel?: string;
+  readonly makeRuntime?: typeof makeGrokAcpRuntime;
+  readonly resolveModelId?: typeof resolveGrokAcpBaseModelId;
+}
+
 export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(function* (
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  options?: GrokTextGenerationOptions,
 ) {
+  const providerLabel = options?.providerLabel ?? "Grok";
+  const makeRuntime = options?.makeRuntime ?? makeGrokAcpRuntime;
+  const resolveModelId = options?.resolveModelId ?? resolveGrokAcpBaseModelId;
   const crypto = yield* Crypto.Crypto;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -61,9 +71,9 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
     modelSelection: ModelSelection;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
-      const resolvedModel = resolveGrokAcpBaseModelId(modelSelection.model);
+      const resolvedModel = resolveModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
-      const runtime = yield* makeGrokAcpRuntime({
+      const runtime = yield* makeRuntime({
         grokSettings,
         environment,
         childProcessSpawner: commandSpawner,
@@ -100,7 +110,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           mapError: (cause) =>
             new TextGenerationError({
               operation,
-              detail: "Failed to set Grok ACP base model for text generation.",
+              detail: `Failed to set ${providerLabel} ACP base model for text generation.`,
               cause,
             }),
         });
@@ -114,7 +124,10 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           Option.match({
             onNone: () =>
               Effect.fail(
-                new TextGenerationError({ operation, detail: "Grok ACP request timed out." }),
+                new TextGenerationError({
+                  operation,
+                  detail: `${providerLabel} ACP request timed out.`,
+                }),
               ),
             onSome: (value) => Effect.succeed(value),
           }),
@@ -124,7 +137,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
             ? cause
             : new TextGenerationError({
                 operation,
-                detail: "Grok ACP request failed.",
+                detail: `${providerLabel} ACP request failed.`,
                 cause,
               }),
         ),
@@ -136,8 +149,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           operation,
           detail:
             promptResult.stopReason === "cancelled"
-              ? "Grok ACP request was cancelled."
-              : "Grok Agent returned empty output.",
+              ? `${providerLabel} ACP request was cancelled.`
+              : `${providerLabel} returned empty output.`,
         });
       }
 
@@ -148,7 +161,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
             Effect.fail(
               new TextGenerationError({
                 operation,
-                detail: "Grok Agent returned invalid structured output.",
+                detail: `${providerLabel} returned invalid structured output.`,
                 cause,
               }),
             ),
@@ -160,7 +173,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           ? cause
           : new TextGenerationError({
               operation,
-              detail: "Grok ACP text generation failed.",
+              detail: `${providerLabel} ACP text generation failed.`,
               cause,
             }),
       ),

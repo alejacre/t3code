@@ -60,6 +60,8 @@ const permissionRequestCount = Math.max(
   1,
   Number(process.env.T3_ACP_PERMISSION_REQUEST_COUNT ?? "1") || 1,
 );
+const permissionToolKind = (process.env.T3_ACP_PERMISSION_TOOL_KIND ??
+  "execute") as AcpSchema.ToolKind;
 const sessionId = "mock-session-1";
 
 let currentModeId = "ask";
@@ -589,7 +591,7 @@ const program = Effect.gen(function* () {
             sessionUpdate: "tool_call",
             toolCallId,
             title: "Long-running tool",
-            kind: "execute",
+            kind: permissionToolKind,
             status: "pending",
             rawInput: { command: ["long-running-tool"] },
           },
@@ -764,7 +766,7 @@ const program = Effect.gen(function* () {
             toolCall: {
               toolCallId: index === 0 ? toolCallId : `${toolCallId}-${index + 1}`,
               title: process.env.T3_ACP_PERMISSION_TITLE ?? `\`${command}\``,
-              kind: "execute",
+              kind: permissionToolKind,
               status: "pending",
               rawInput: {
                 variant: "Bash",
