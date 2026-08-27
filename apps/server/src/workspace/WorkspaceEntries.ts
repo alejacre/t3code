@@ -145,10 +145,7 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
 });
 
 function normalizeFallbackEntryPath(input: string): string {
-  return input
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "");
+  return input.replace(/^\.\/+/, "").replace(/\/+$/, "");
 }
 
 function isFallbackExcludedPath(input: string): boolean {
@@ -414,7 +411,7 @@ export const make = Effect.gen(function* () {
             WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
           ),
         ),
-        Effect.catchTag("WorkspaceSearchIndexCreateFailed", recoverWithFilesystemList),
+        Effect.catchTags({ WorkspaceSearchIndexCreateFailed: recoverWithFilesystemList }),
       );
     },
   );

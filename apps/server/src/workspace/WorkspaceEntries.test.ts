@@ -907,6 +907,19 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
       }),
     );
 
+    it.effect("preserves backslashes in POSIX file names", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        fallbackVcsRunMock.mockReturnValueOnce(
+          Effect.succeed(gitLsFilesOutput("src/foo\\bar.ts\0")),
+        );
+
+        const result = yield* listWithUnavailableIndex(cwd);
+
+        expect(result.entries).toContainEqual({ path: "src/foo\\bar.ts", kind: "file" });
+      }),
+    );
+
     it.effect("drops the partial trailing entry from truncated git output", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
