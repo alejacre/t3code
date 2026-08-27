@@ -49,6 +49,17 @@ describe("ProviderSettingsForm helpers", () => {
     ]);
   });
 
+  it("shows Kiro ACP configuration fields", () => {
+    const kiro = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("kiro")];
+    expect(kiro).toBeDefined();
+
+    expect(deriveProviderSettingsFields(kiro!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "agentEngine",
+      "agent",
+    ]);
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();

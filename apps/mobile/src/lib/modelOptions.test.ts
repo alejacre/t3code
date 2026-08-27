@@ -51,6 +51,30 @@ describe("mobile model options", () => {
     ]);
   });
 
+  it("uses the Kiro product label for its default instance", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "kiro",
+          driver: "kiro",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "auto",
+              name: "Auto",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(groupByProvider(buildModelOptions(config, null))[0]?.providerLabel).toBe("Kiro");
+  });
+
   it("normalizes a legacy fallback selection against current capabilities", () => {
     const config = {
       providers: [

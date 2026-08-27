@@ -1663,101 +1663,108 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
-      it.effect(
-        "keeps Cursor disabled and skips provider probing when settings use their defaults",
-        () =>
-          Effect.gen(function* () {
-            const serverSettings = yield* makeMutableServerSettingsService(
-              decodeServerSettings(
-                deepMerge(encodedDefaultServerSettings, {
-                  providers: {
-                    codex: {
-                      enabled: false,
-                    },
-                    grok: {
-                      enabled: false,
-                    },
+      it.effect("keeps opt-in providers disabled and skips their probes by default", () =>
+        Effect.gen(function* () {
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  codex: {
+                    enabled: false,
                   },
-                }),
+                  grok: {
+                    enabled: false,
+                  },
+                },
+              }),
+            ),
+          );
+          let cursorSpawned = false;
+          let kiroSpawned = false;
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+            ),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-",
+              }),
+            ),
+            Layer.provideMerge(TestHttpClientLive),
+            Layer.provideMerge(
+              Layer.succeed(
+                ProviderEventLoggers.ProviderEventLoggers,
+                ProviderEventLoggers.NoOpProviderEventLoggers,
               ),
-            );
-            let cursorSpawned = false;
-            const scope = yield* Scope.make();
-            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-            const providerRegistryLayer = ProviderRegistryLive.pipe(
-              Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-              Layer.provideMerge(
-                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-              ),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-",
-                }),
-              ),
-              Layer.provideMerge(TestHttpClientLive),
-              Layer.provideMerge(
-                Layer.succeed(
-                  ProviderEventLoggers.ProviderEventLoggers,
-                  ProviderEventLoggers.NoOpProviderEventLoggers,
-                ),
-              ),
-              Layer.provideMerge(ModelManifest.layerTest),
-              Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
-              Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
-              Layer.provideMerge(
-                mockCommandSpawnerLayer((command, args) => {
-                  if (command === "cursor-agent") {
-                    cursorSpawned = true;
-                  }
-                  const joined = args.join(" ");
-                  if (joined === "--version") {
-                    return {
-                      stdout: `${command} 1.0.0\n`,
-                      stderr: "",
-                      code: 0,
-                    };
-                  }
-                  if (joined === "auth status") {
-                    return {
-                      stdout: '{"authenticated":true}\n',
-                      stderr: "",
-                      code: 0,
-                    };
-                  }
-                  throw new Error(`Unexpected args: ${command} ${joined}`);
-                }),
-              ),
-            );
-            const runtimeServices = yield* Layer.build(
-              Layer.mergeAll(
-                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-                providerRegistryLayer,
-              ),
-            ).pipe(Scope.provide(scope));
+            ),
+            Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+            Layer.provideMerge(
+              mockCommandSpawnerLayer((command, args) => {
+                if (command === "cursor-agent") {
+                  cursorSpawned = true;
+                }
+                if (command === "kiro-cli") {
+                  kiroSpawned = true;
+                }
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return {
+                    stdout: `${command} 1.0.0\n`,
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                if (joined === "auth status") {
+                  return {
+                    stdout: '{"authenticated":true}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                throw new Error(`Unexpected args: ${command} ${joined}`);
+              }),
+            ),
+          );
+          const runtimeServices = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+              providerRegistryLayer,
+            ),
+          ).pipe(Scope.provide(scope));
 
-            yield* Effect.gen(function* () {
-              const registry = yield* ProviderRegistry.ProviderRegistry;
-              const providers = yield* registry.getProviders;
-              const cursorProvider = providers.find(
-                (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
-              );
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const providers = yield* registry.getProviders;
+            const cursorProvider = providers.find(
+              (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
+            );
+            const kiroProvider = providers.find(
+              (provider) => provider.instanceId === ProviderInstanceId.make("kiro"),
+            );
 
-              assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
-                "claudeAgent",
-                "codex",
-                "cursor",
-                "grok",
-                "opencode",
-              ]);
-              assert.strictEqual(cursorProvider?.enabled, false);
-              assert.strictEqual(cursorProvider?.status, "disabled");
-              assert.strictEqual(
-                cursorProvider?.message,
-                "Cursor is disabled in T3 Code settings.",
-              );
-              assert.strictEqual(cursorSpawned, false);
-            }).pipe(Effect.provide(runtimeServices));
-          }),
+            assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
+              "claudeAgent",
+              "codex",
+              "cursor",
+              "grok",
+              "kiro",
+              "opencode",
+            ]);
+            assert.strictEqual(cursorProvider?.enabled, false);
+            assert.strictEqual(cursorProvider?.status, "disabled");
+            assert.strictEqual(cursorProvider?.message, "Cursor is disabled in T3 Code settings.");
+            assert.strictEqual(cursorSpawned, false);
+            assert.strictEqual(kiroProvider?.enabled, false);
+            assert.strictEqual(kiroProvider?.status, "disabled");
+            assert.strictEqual(kiroProvider?.message, "Kiro is disabled in T3 Code settings.");
+            assert.strictEqual(kiroSpawned, false);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
       );
 
       it.effect("skips codex probes entirely when the provider is disabled", () =>

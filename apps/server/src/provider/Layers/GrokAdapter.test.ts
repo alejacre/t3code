@@ -18,6 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   ApprovalRequestId,
   GrokSettings,
+  KiroSettings,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -32,8 +33,11 @@ import {
   makeGrokAdapter,
   nextGrokPlanModeActive,
   selectGrokPermissionOptionId,
+  shouldAutoApproveAcpPermission,
 } from "./GrokAdapter.ts";
+import { makeKiroAdapter } from "./KiroAdapter.ts";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
+const decodeKiroSettings = Schema.decodeSync(KiroSettings);
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -94,6 +98,8 @@ const grokAdapterTestLayer = ServerConfig.layerTest(process.cwd(), {
 
 const makeTestAdapter = (binaryPath: string, options?: Parameters<typeof makeGrokAdapter>[1]) =>
   makeGrokAdapter(decodeGrokSettings({ binaryPath }), options).pipe(Effect.orDie);
+const makeTestKiroAdapter = (binaryPath: string) =>
+  makeKiroAdapter(decodeKiroSettings({ enabled: true, binaryPath })).pipe(Effect.orDie);
 
 it("detects enter_plan_mode tool calls from title and rawInput", () => {
   assert.isTrue(
@@ -177,6 +183,37 @@ it("prefers allow_always when Grok offers it", () => {
 
   assert.equal(selectGrokPermissionOptionId(request, "acceptForSession"), "allow-always");
   assert.equal(selectGrokPermissionOptionId(request, "accept"), "allow-once");
+});
+
+it("auto-approves only file-changing ACP permissions in auto-accept-edits mode", () => {
+  assert.isTrue(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "edit",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isTrue(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "delete",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isFalse(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto-accept-edits",
+      toolKind: "execute",
+      autoApproveEditPermissions: true,
+    }),
+  );
+  assert.isFalse(
+    shouldAutoApproveAcpPermission({
+      runtimeMode: "auto",
+      toolKind: "edit",
+      autoApproveEditPermissions: true,
+    }),
+  );
 });
 
 it("requires a settlement to match the live Grok turn", () => {
@@ -1593,6 +1630,57 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
             entry.result.outcome !== null &&
             "optionId" in entry.result.outcome &&
             entry.result.outcome.optionId === "agent-defined-approval-id",
+        ),
+      );
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("auto-approves Kiro file edits without opening an approval request", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("kiro-auto-accept-edit");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "kiro-acp-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          T3_ACP_EMIT_TOOL_CALLS: "1",
+          T3_ACP_PERMISSION_TOOL_KIND: "edit",
+        }),
+      );
+      const adapter = yield* makeTestKiroAdapter(wrapperPath);
+      const openedCount = yield* Ref.make(0);
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "request.opened"
+          ? Ref.update(openedCount, (count) => count + 1)
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("kiro"),
+        cwd: process.cwd(),
+        runtimeMode: "auto-accept-edits",
+      });
+      yield* adapter.sendTurn({ threadId, input: "edit the file", attachments: [] });
+
+      assert.equal(yield* Ref.get(openedCount), 0);
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.isTrue(
+        requests.some(
+          (entry) =>
+            !("method" in entry) &&
+            typeof entry.result === "object" &&
+            entry.result !== null &&
+            "outcome" in entry.result &&
+            typeof entry.result.outcome === "object" &&
+            entry.result.outcome !== null &&
+            "optionId" in entry.result.outcome &&
+            entry.result.outcome.optionId === "allow-once",
         ),
       );
 
