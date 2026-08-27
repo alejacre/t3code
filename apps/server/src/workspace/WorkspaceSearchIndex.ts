@@ -1,13 +1,15 @@
-import {
-  type DirItem,
-  type DirSearchResult,
-  type FileItem,
+// Keep this type-only: older glibc hosts cannot load fff-node's native binding.
+// The runtime import belongs in createFinder so server startup remains available.
+import type {
+  DirItem,
+  DirSearchResult,
+  FileItem,
   FileFinder,
-  type GrepCursor,
-  type MixedItem,
-  type MixedSearchResult,
-  type Result,
-  type SearchResult,
+  GrepCursor,
+  MixedItem,
+  MixedSearchResult,
+  Result,
+  SearchResult,
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -301,6 +303,15 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  const { FileFinder } = yield* Effect.tryPromise({
+    try: () => import("@ff-labs/fff-node"),
+    catch: (cause) =>
+      new WorkspaceSearchIndexCreateFailed({
+        cwd,
+        reason: "The native workspace index is unavailable on this host.",
+        cause,
+      }),
+  });
   const result = yield* Effect.try({
     try: () =>
       FileFinder.create({
