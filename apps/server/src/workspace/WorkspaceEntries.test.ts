@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { FileFinder } from "@ff-labs/fff-node";
-import { it, afterEach, describe, expect } from "@effect/vitest";
+import { it, afterEach, beforeEach, describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -182,11 +182,13 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
     it.effect("honors git ignore rules in the fallback listing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir({ git: true });
-        yield* writeTextFile(cwd, ".gitignore", "ignored.txt\n");
         yield* writeTextFile(cwd, "src/components/Composer.tsx");
         yield* writeTextFile(cwd, "ignored.txt", "ignore me");
+        yield* writeTextFile(cwd, "stale.ts", "remove me");
         yield* writeTextFile(cwd, "node_modules/pkg/index.js");
-        yield* git(cwd, ["add", "src/components/Composer.tsx"]);
+        yield* git(cwd, ["add", "src/components/Composer.tsx", "ignored.txt", "stale.ts"]);
+        yield* writeTextFile(cwd, ".gitignore", "ignored.txt\n");
+        yield* Effect.promise(() => NodeFSP.unlink(`${cwd}/stale.ts`));
 
         vi.spyOn(WorkspaceSearchIndex.nativeBinding, "load").mockRejectedValueOnce(
           new Error("cannot open shared object file"),
@@ -205,6 +207,7 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           ]),
         );
         expect(paths).not.toContain("ignored.txt");
+        expect(paths).not.toContain("stale.ts");
         expect(paths.some((entryPath) => entryPath.startsWith("node_modules"))).toBe(false);
         expect(result.truncated).toBe(false);
       }),
@@ -874,6 +877,15 @@ const gitLsFilesOutput = (
 it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
   "WorkspaceEntries fallback git parsing",
   (it) => {
+    beforeEach(() => {
+      fallbackVcsRunMock.mockImplementation((input) => {
+        if (input.operation === "WorkspaceEntries.fallbackList.gitCheckIgnore") {
+          return Effect.succeed(gitLsFilesOutput(""));
+        }
+        throw new Error(`Unexpected VcsProcess call: ${input.operation}`);
+      });
+    });
+
     afterEach(() => {
       vi.restoreAllMocks();
       fallbackVcsRunMock.mockReset();
@@ -891,6 +903,8 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
     it.effect("reconstructs parent directories from git file paths", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "src/components/Composer.tsx");
+        yield* writeTextFile(cwd, "README.md");
         fallbackVcsRunMock.mockReturnValueOnce(
           Effect.succeed(gitLsFilesOutput("src/components/Composer.tsx\0README.md\0")),
         );
@@ -910,6 +924,7 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
     it.effect("preserves backslashes in POSIX file names", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "src/foo\\bar.ts");
         fallbackVcsRunMock.mockReturnValueOnce(
           Effect.succeed(gitLsFilesOutput("src/foo\\bar.ts\0")),
         );
@@ -923,6 +938,8 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
     it.effect("drops the partial trailing entry from truncated git output", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "src/kept.ts");
+        yield* writeTextFile(cwd, "README.md");
         fallbackVcsRunMock.mockReturnValueOnce(
           Effect.succeed(gitLsFilesOutput("src/kept.ts\0README.md\0src/part", true)),
         );
@@ -941,6 +958,8 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
     it.effect("keeps a complete trailing entry when truncation ends on the delimiter", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "a.txt");
+        yield* writeTextFile(cwd, "b.txt");
         fallbackVcsRunMock.mockReturnValueOnce(
           Effect.succeed(gitLsFilesOutput("a.txt\0b.txt\0", true)),
         );
@@ -959,6 +978,9 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
         const files = Array.from({ length: 25_001 }, (_, index) => `file-${index}.txt`);
+        vi.spyOn(NodeFSP, "lstat").mockResolvedValue({
+          isDirectory: () => false,
+        } as Awaited<ReturnType<typeof NodeFSP.lstat>>);
         fallbackVcsRunMock.mockReturnValueOnce(
           Effect.succeed(gitLsFilesOutput(`${files.join("\0")}\0`)),
         );
@@ -967,6 +989,18 @@ it.layer(MockedVcsTestLayer, { excludeTestServices: true })(
 
         expect(result.entries).toHaveLength(25_000);
         expect(result.truncated).toBe(true);
+      }),
+    );
+
+    it.effect("classifies git submodules as directories", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        yield* Effect.promise(() => NodeFSP.mkdir(`${cwd}/vendor/sdk`, { recursive: true }));
+        fallbackVcsRunMock.mockReturnValueOnce(Effect.succeed(gitLsFilesOutput("vendor/sdk\0")));
+
+        const result = yield* listWithUnavailableIndex(cwd);
+
+        expect(result.entries).toContainEqual({ path: "vendor/sdk", kind: "directory" });
       }),
     );
 

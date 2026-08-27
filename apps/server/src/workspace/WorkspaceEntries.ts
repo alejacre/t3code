@@ -155,14 +155,14 @@ function isFallbackExcludedPath(input: string): boolean {
 }
 
 function buildFallbackListResult(
-  files: ReadonlyArray<string>,
+  sourceEntries: ReadonlyArray<ProjectEntry>,
   truncated: boolean,
 ): ProjectListEntriesResult {
   const entryByPath = new Map<string, ProjectEntry>();
-  for (const file of files) {
-    const normalizedPath = normalizeFallbackEntryPath(file);
+  for (const sourceEntry of sourceEntries) {
+    const normalizedPath = normalizeFallbackEntryPath(sourceEntry.path);
     if (!normalizedPath || isFallbackExcludedPath(normalizedPath)) continue;
-    entryByPath.set(normalizedPath, { path: normalizedPath, kind: "file" });
+    entryByPath.set(normalizedPath, { path: normalizedPath, kind: sourceEntry.kind });
 
     let separatorIndex = normalizedPath.lastIndexOf("/");
     while (separatorIndex > 0) {
@@ -204,8 +204,41 @@ const listWorkspaceEntriesFromFilesystem = Effect.fn(
       files.pop();
     }
     const exceededEntryLimit = files.length > FALLBACK_LIST_MAX_ENTRIES;
+    const boundedFiles = files.slice(0, FALLBACK_LIST_MAX_ENTRIES + 1);
+    const ignoredResult = yield* vcsProcess
+      .run({
+        operation: "WorkspaceEntries.fallbackList.gitCheckIgnore",
+        command: "git",
+        cwd,
+        args: ["check-ignore", "--no-index", "-z", "--stdin"],
+        stdin: `${boundedFiles.join("\0")}\0`,
+        allowNonZeroExit: true,
+        timeoutMs: 15_000,
+        maxOutputBytes: FALLBACK_LIST_GIT_OUTPUT_MAX_BYTES,
+      })
+      .pipe(Effect.orElseSucceed(() => null));
+    const ignoredPaths = new Set(
+      ignoredResult?.stdout.split("\0").map(normalizeFallbackEntryPath).filter(Boolean) ?? [],
+    );
+    const entries = yield* Effect.forEach(
+      boundedFiles.filter((file) => !ignoredPaths.has(normalizeFallbackEntryPath(file))),
+      (file) =>
+        Effect.promise(async () => {
+          const normalizedPath = normalizeFallbackEntryPath(file);
+          try {
+            const stat = await NodeFSP.lstat(path.join(cwd, normalizedPath));
+            return {
+              path: normalizedPath,
+              kind: stat.isDirectory() ? ("directory" as const) : ("file" as const),
+            };
+          } catch {
+            return null;
+          }
+        }),
+      { concurrency: 32 },
+    );
     return buildFallbackListResult(
-      files.slice(0, FALLBACK_LIST_MAX_ENTRIES + 1),
+      entries.filter((entry): entry is ProjectEntry => entry !== null),
       gitResult.stdoutTruncated || exceededEntryLimit,
     );
   }
