@@ -643,6 +643,20 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("preserves an explicitly disabled Kiro provider after prior use", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* recordProviderUsage("kiro");
+      yield* serverSettings.updateSettings({
+        providers: { kiro: { enabled: false } },
+      });
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.isFalse(settings.providers.kiro.enabled);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves provider history when the settings file is invalid", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -979,6 +993,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             enabled: false,
           },
           grok: {
+            enabled: false,
+          },
+          kiro: {
             enabled: false,
           },
           opencode: {
