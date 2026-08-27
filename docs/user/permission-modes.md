@@ -29,6 +29,10 @@ there.
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
 
+For Kiro, **Auto-accept edits** approves ACP file changes (`edit`, `delete`, and `move`) while
+commands continue to ask. Kiro does not expose a separate routine-action permission mode, so
+**Auto** currently behaves like **Supervised**.
+
 ## Choosing a Mode
 
 Use **Full access** for work in a worktree or a sandbox you can throw away.

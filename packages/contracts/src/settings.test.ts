@@ -8,6 +8,7 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   defaultEnabledForDriver,
+  KiroSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -19,6 +20,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeKiroSettings = Schema.decodeUnknownSync(KiroSettings);
 
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
@@ -233,6 +235,7 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.claudeAgent.enabled).toBe(true);
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
+    expect(decoded.providers.kiro.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
   });
 
@@ -240,6 +243,7 @@ describe("provider enabled defaults", () => {
     expect(defaultEnabledForDriver(ProviderDriverKind.make("codex"))).toBe(true);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("cursor"))).toBe(false);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("grok"))).toBe(false);
+    expect(defaultEnabledForDriver(ProviderDriverKind.make("kiro"))).toBe(false);
     // Unknown fork drivers stay enabled; their own build decides otherwise.
     expect(defaultEnabledForDriver(ProviderDriverKind.make("ollama"))).toBe(true);
   });
@@ -278,6 +282,43 @@ describe("provider enabled defaults", () => {
     expect(
       resolveProviderInstanceEnabled({ driver: codex, enabled: false, config: { enabled: true } }),
     ).toBe(false);
+  });
+});
+
+describe("ServerSettings.providers.kiro", () => {
+  it("uses safe ACP defaults and trims configurable values", () => {
+    expect(decodeKiroSettings({})).toEqual({
+      enabled: false,
+      binaryPath: "kiro-cli",
+      agentEngine: "",
+      agent: "",
+      customModels: [],
+    });
+
+    const decoded = decodeServerSettings({
+      providers: {
+        kiro: {
+          enabled: true,
+          binaryPath: "  /opt/kiro/kiro-cli  ",
+          agentEngine: "  v3  ",
+          agent: "  custom-agent  ",
+        },
+      },
+    });
+
+    expect(decoded.providers.kiro).toMatchObject({
+      enabled: true,
+      binaryPath: "/opt/kiro/kiro-cli",
+      agentEngine: "v3",
+      agent: "custom-agent",
+    });
+  });
+
+  it("rejects unsupported agent engines in settings and patches", () => {
+    expect(() => decodeKiroSettings({ agentEngine: "v4" })).toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({ providers: { kiro: { agentEngine: "experimental" } } }),
+    ).toThrow();
   });
 });
 
