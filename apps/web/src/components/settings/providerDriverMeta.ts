@@ -1,11 +1,24 @@
 import {
+  AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  CursorSettings,
+  GrokSettings,
   KiroSettings,
+  OpenCodeSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
-import { ClaudeAI, KiroIcon, type Icon, OpenAI } from "../Icons";
+import {
+  AntigravityIcon,
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  KiroIcon,
+  type Icon,
+  OpenAI,
+  OpenCodeIcon,
+} from "../Icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
@@ -32,7 +45,7 @@ export interface ProviderClientDefinition {
   readonly badgeLabel?: string;
 }
 
-export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",
@@ -46,6 +59,32 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
     settingsSchema: ClaudeSettings,
   },
   {
+    value: ProviderDriverKind.make("cursor"),
+    label: "Cursor",
+    icon: CursorIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: CursorSettings,
+  },
+  {
+    value: ProviderDriverKind.make("grok"),
+    label: "Grok",
+    icon: GrokIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: GrokSettings,
+  },
+  {
+    value: ProviderDriverKind.make("opencode"),
+    label: "OpenCode",
+    icon: OpenCodeIcon,
+    settingsSchema: OpenCodeSettings,
+  },
+  {
+    value: ProviderDriverKind.make("antigravity"),
+    label: "Antigravity",
+    icon: AntigravityIcon,
+    settingsSchema: AntigravitySettings,
+  },
+  {
     value: ProviderDriverKind.make("kiro"),
     label: "Kiro",
     icon: KiroIcon,
@@ -54,7 +93,7 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
   },
 ];
 
-export const PROVIDER_CLIENT_DEFINITION_BY_VALUE: Partial<
+const PROVIDER_CLIENT_DEFINITION_BY_VALUE: Partial<
   Record<ProviderDriverKind, ProviderClientDefinition>
 > = Object.fromEntries(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition]),

@@ -1,4 +1,5 @@
 import {
+  type CustomModelSetting,
   type KiroSettings,
   type ModelCapabilities,
   type ServerProviderModel,
@@ -56,10 +57,10 @@ const KiroModelListResponse = Schema.Struct({
 const decodeKiroModelList = Schema.decodeUnknownExit(Schema.fromJsonString(KiroModelListResponse));
 
 function modelsFromSettings(
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discoveredModels: ReadonlyArray<ServerProviderModel> = KIRO_FALLBACK_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(discoveredModels, customModels, EMPTY_CAPABILITIES);
+  return providerModelsFromSettings(discoveredModels, customModels ?? [], EMPTY_CAPABILITIES);
 }
 
 function parseKiroModels(output: string): ReadonlyArray<ServerProviderModel> | null {
