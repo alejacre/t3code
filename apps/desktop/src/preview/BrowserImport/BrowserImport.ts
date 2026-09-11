@@ -27,6 +27,7 @@ import * as BrowserSession from "../BrowserSession.ts";
 import { ChromiumCookieReadError, readChromiumCookies } from "./ChromiumCookies.ts";
 import type { CookieReadResult } from "./CookieDatabase.ts";
 import { FirefoxCookieReadError, readFirefoxCookies } from "./FirefoxCookies.ts";
+import { hasLiveMidwaySession, MidwayCookieReadError, readMidwayCookies } from "./MidwayCookies.ts";
 import { readSafariCookies, safariAccessDenied, SafariCookieReadError } from "./SafariCookies.ts";
 import {
   BROWSER_IMPORT_SOURCES,
@@ -101,6 +102,19 @@ const unavailableReason = Effect.fn("BrowserImport.unavailableReason")(function*
   if (definition.engine === "safari") {
     const jar = yield* resolveCookieDatabase(definition, context, ".");
     if (jar !== undefined && (yield* safariAccessDenied(jar))) return "needsFullDiskAccess";
+  }
+  // A Midway jar outlives the session it holds: `mwinit` leaves the file in
+  // place after the `session` cookie lapses. Importing it then would write only
+  // stale tokens, so tell the user to refresh instead of reporting success.
+  if (definition.engine === "midway") {
+    const jar = yield* resolveCookieDatabase(definition, context, ".");
+    if (jar !== undefined) {
+      const live = yield* readMidwayCookies(jar).pipe(
+        Effect.map(hasLiveMidwaySession),
+        Effect.orElseSucceed(() => false),
+      );
+      if (!live) return "sessionExpired";
+    }
   }
   return undefined;
 });
@@ -264,29 +278,45 @@ export const make = Effect.gen(function* BrowserImportMake() {
     const userDataDirectory = definition.userDataDirectory(pathContext);
     const read: Effect.Effect<
       CookieReadResult,
-      ChromiumCookieReadError | FirefoxCookieReadError | SafariCookieReadError,
+      | ChromiumCookieReadError
+      | FirefoxCookieReadError
+      | SafariCookieReadError
+      | MidwayCookieReadError,
       FileSystem.FileSystem | Path.Path | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
     > =
-      definition.engine === "safari"
-        ? readSafariCookies(databasePath).pipe(
-            Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
+      definition.engine === "midway"
+        ? readMidwayCookies(databasePath).pipe(
+            // Expired rows are reported as skipped rather than silently dropped,
+            // so a jar full of lapsed tokens does not read as a clean import.
+            Effect.map((jar) => ({
+              cookies: jar.cookies,
+              undecryptable: jar.expired,
+              undecryptableHosts: [],
+            })),
           )
-        : definition.engine === "firefox"
-          ? readFirefoxCookies(databasePath).pipe(
+        : definition.engine === "safari"
+          ? readSafariCookies(databasePath).pipe(
               Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
             )
-          : readChromiumCookies({
-              cookieDatabasePath: databasePath,
-              keychainService: definition.keychainService,
-              keychainAccount: definition.keychainAccount,
-              linuxSecretApplication: definition.linuxSecretApplication,
-              ...(platform === "win32" && userDataDirectory !== undefined
-                ? {
-                    windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State"),
-                  }
-                : {}),
-              platform,
-            });
+          : definition.engine === "firefox"
+            ? readFirefoxCookies(databasePath).pipe(
+                Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
+              )
+            : readChromiumCookies({
+                cookieDatabasePath: databasePath,
+                keychainService: definition.keychainService,
+                keychainAccount: definition.keychainAccount,
+                linuxSecretApplication: definition.linuxSecretApplication,
+                ...(platform === "win32" && userDataDirectory !== undefined
+                  ? {
+                      windowsLocalStatePath: pathContext.path.join(
+                        userDataDirectory,
+                        "Local State",
+                      ),
+                    }
+                  : {}),
+                platform,
+              });
 
     const result = yield* read.pipe(
       Effect.scoped,
@@ -308,6 +338,12 @@ export const make = Effect.gen(function* BrowserImportMake() {
         SafariCookieReadError: (cause) =>
           Effect.fail(
             new BrowserImportFailedError({ sourceId: definition.id, reason: cause.reason, cause }),
+          ),
+        // The Midway jar is plain text; the only failure is that it would not
+        // read, which the pre-flight already narrowed to "it was there".
+        MidwayCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed", cause }),
           ),
       }),
     );

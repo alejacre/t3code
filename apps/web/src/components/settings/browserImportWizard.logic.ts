@@ -64,7 +64,7 @@ export type WizardStep =
       readonly checked?: boolean;
     }
   | { readonly step: "configure" }
-  | { readonly step: "checking"; readonly check: "browser" | "fullDiskAccess" }
+  | { readonly step: "checking"; readonly check: WizardCheck }
   | { readonly step: "importing" }
   | {
       readonly step: "done";
@@ -74,6 +74,12 @@ export type WizardStep =
       readonly targetName: string;
     }
   | { readonly step: "blocked"; readonly reason: BrowserImportFailureReason };
+
+/**
+ * What a "checking" screen is waiting on: a browser to quit, a permission to
+ * be granted, or (Midway) a session to be refreshed from the terminal.
+ */
+export type WizardCheck = "browser" | "fullDiskAccess" | "session";
 
 /** The import owns its target partition until the write finishes. */
 export function canCloseWizard(step: WizardStep): boolean {
@@ -142,6 +148,16 @@ export function refreshedSourceProfileDirectory(
 }
 
 /**
+ * Whether a blocked reason is cleared by re-listing the source rather than by
+ * re-running the import: the user acts outside the app (runs `mwinit`), and the
+ * wizard should then land on the configure step, not on an import into a
+ * target it never let them choose.
+ */
+export function isRecheckReason(reason: BrowserImportFailureReason): boolean {
+  return reason === "sessionExpired";
+}
+
+/**
  * Whether retrying could clear a failure. The keychain prompt can be approved
  * on a second try, a missing key appears once the user signs in to the
  * browser (which is what its copy asks for), and a read or session error may
@@ -156,6 +172,7 @@ export function isRetryableReason(reason: BrowserImportFailureReason): boolean {
     case "readFailed":
     case "sessionUnavailable":
     case "profileNotSaved":
+    case "sessionExpired":
       return true;
     default:
       return false;

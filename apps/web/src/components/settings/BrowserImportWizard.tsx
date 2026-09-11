@@ -22,6 +22,7 @@ import {
   initialTargetSelection,
   canCloseWizard,
   isRetryableReason,
+  isRecheckReason,
   formatSkippedDomains,
   fullDiskAccessRecheckStep,
   outcomeToStep,
@@ -32,6 +33,7 @@ import {
   type WizardTarget,
   type WizardTargetProfile,
   type WizardTargetSelection,
+  type WizardCheck,
   type WizardStep,
 } from "./browserImportWizard.logic";
 
@@ -118,7 +120,7 @@ export function BrowserImportWizard({
   // Re-lists the source after the user did something outside the app (quit the
   // browser, granted access) and routes to wherever the refreshed source says.
   const recheckSource = (
-    check: "browser" | "fullDiskAccess",
+    check: WizardCheck,
     nextStep: (refreshed: BrowserImportSource | undefined) => WizardStep,
   ) => {
     setStep({ step: "checking", check });
@@ -135,6 +137,7 @@ export function BrowserImportWizard({
       .catch(() => setStep({ step: "blocked", reason: "readFailed" }));
   };
   const recheckAfterQuit = () => recheckSource("browser", refreshedSourceStep);
+  const recheckSession = () => recheckSource("session", refreshedSourceStep);
   const recheckFullDiskAccess = () => recheckSource("fullDiskAccess", fullDiskAccessRecheckStep);
 
   return (
@@ -165,7 +168,13 @@ export function BrowserImportWizard({
             source={source}
             reason={step.reason}
             onClose={onClose}
-            onRetry={isRetryableReason(step.reason) ? runImport : undefined}
+            onRetry={
+              isRecheckReason(step.reason)
+                ? recheckSession
+                : isRetryableReason(step.reason)
+                  ? runImport
+                  : undefined
+            }
           />
         ) : (
           <ConfigureStep
@@ -449,7 +458,7 @@ function CheckingStep({
   check,
 }: {
   readonly sourceName: string;
-  readonly check: "browser" | "fullDiskAccess";
+  readonly check: WizardCheck;
 }) {
   return (
     <>
@@ -458,7 +467,9 @@ function CheckingStep({
         <DialogDescription>
           {check === "fullDiskAccess"
             ? "Checking Full Disk Access."
-            : "Checking whether the browser has closed."}
+            : check === "session"
+              ? "Checking for a fresh session."
+              : "Checking whether the browser has closed."}
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="flex items-center gap-3 py-6">

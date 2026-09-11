@@ -32,7 +32,12 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export type BrowserImportEngine = "chromium" | "firefox" | "safari";
+import { readMidwayCookies } from "./MidwayCookies.ts";
+
+export type BrowserImportEngine = "chromium" | "firefox" | "safari" | "midway";
+
+/** The jar `mwinit` writes inside `~/.midway`. */
+export const MIDWAY_COOKIE_JAR_FILE = "cookie";
 
 /**
  * Directory roots a definition builds its paths from. Passed in rather than
@@ -213,6 +218,16 @@ export const BROWSER_IMPORT_SOURCES: ReadonlyArray<BrowserImportSourceDefinition
       return context.path.join(context.home, ".mozilla", "firefox");
     },
   },
+  {
+    // Not a browser: `mwinit` writes its Netscape cookie jar under `~/.midway`
+    // on every platform it ships for. There is one jar, so one profile.
+    id: "midway",
+    name: "Midway (mwinit)",
+    engine: "midway",
+    platforms: ["darwin", "linux", "win32"],
+    userDataDirectory: (context) =>
+      context.home === "" ? undefined : context.path.join(context.home, ".midway"),
+  },
 ];
 
 /**
@@ -243,6 +258,10 @@ export const cookieDatabaseCandidatePaths = (
   }
   if (definition.engine === "safari") {
     return [context.path.join(profilePath, "Cookies.binarycookies")];
+  }
+  if (definition.engine === "midway") {
+    // A single jar, not per-profile: the profile directory is always `.`.
+    return [context.path.join(root, MIDWAY_COOKIE_JAR_FILE)];
   }
   // Chromium: pre-96 uses `Cookies`, 96+ use `Network/Cookies`. An upgrade
   // leaves the legacy file behind, so prefer the current one and fall back.
@@ -383,6 +402,14 @@ const countProfileCookies = Effect.fnUntraced(function* (
 ): Effect.fn.Return<number | undefined, never, FileSystem.FileSystem> {
   const database = yield* resolveCookieDatabase(definition, context, directory);
   if (database === undefined) return undefined;
+  if (definition.engine === "midway") {
+    // Plain text, so counting is a parse. Expired rows are left out to match
+    // what the import will actually write.
+    return yield* readMidwayCookies(database).pipe(
+      Effect.map((jar) => jar.cookies.length),
+      Effect.orElseSucceed(() => undefined),
+    );
+  }
   return yield* Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const rows =
@@ -487,6 +514,16 @@ const listSourceProfilesInDirectory = Effect.fnUntraced(function* (
 
   if (definition.engine === "safari") {
     return yield* listSafariProfiles(context, root);
+  }
+
+  if (definition.engine === "midway") {
+    // One jar, one profile. Listed only when the file exists so a machine
+    // without `mwinit` reads as not installed rather than as an empty source.
+    const jar = yield* resolveCookieDatabase(definition, context, ".");
+    if (jar === undefined) return [];
+    return yield* withCookieCounts(definition, context, [
+      { directory: ".", name: "Midway session" },
+    ]);
   }
 
   if (definition.engine === "firefox") {
@@ -867,7 +904,9 @@ export const isSourceRunning = Effect.fn("BrowserImportSources.isSourceRunning")
   // profile under three names across platforms (`lock` on macOS and Linux,
   // `.parentlock` beside it, `parent.lock` on Windows). Looking for Firefox's
   // at the root finds nothing and reports a running browser as importable.
-  if (definition.engine === "safari") return false;
+  // Midway's jar is rewritten whole by a short-lived CLI, so there is no
+  // running process to wait for either.
+  if (definition.engine === "safari" || definition.engine === "midway") return false;
   if (definition.engine !== "firefox") {
     if (context.platform === "win32") {
       return yield* windowsChromiumCookiesAreHeld(definition, context);

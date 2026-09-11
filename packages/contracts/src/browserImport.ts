@@ -26,6 +26,12 @@ const BROWSER_IMPORT_SOURCE_IDS = [
   "helium",
   "firefox",
   "safari",
+  /**
+   * Not a browser: the Netscape-format cookie jar `mwinit` writes to
+   * `~/.midway/cookie`. Importing it gives a profile the Midway SSO session,
+   * so internal Amazon sites open without a fresh hardware-key sign-in.
+   */
+  "midway",
 ] as const;
 
 export const BrowserImportSourceId = Schema.Literals(BROWSER_IMPORT_SOURCE_IDS);
@@ -46,6 +52,12 @@ export const BrowserImportUnavailableReason = Schema.Literals([
   "needsFullDiskAccess",
   "browserRunning",
   "unsupportedPlatform",
+  /**
+   * Midway only: the jar exists but its `midway-auth.amazon.com` session has
+   * lapsed, so importing it would sign nothing in. Recoverable by running
+   * `mwinit` again.
+   */
+  "sessionExpired",
 ]);
 export type BrowserImportUnavailableReason = typeof BrowserImportUnavailableReason.Type;
 
@@ -148,6 +160,7 @@ const BROWSER_IMPORT_UNAVAILABLE_COPY: Readonly<Record<BrowserImportUnavailableR
     "Give T3 Code Full Disk Access in System Settings → Privacy & Security, then retry.",
   browserRunning: "Quit the browser first so its cookie database can be read.",
   unsupportedPlatform: "Importing from this browser isn't possible on this platform.",
+  sessionExpired: "Your Midway session has expired. Run `mwinit -o` in a terminal, then retry.",
 };
 
 /** What to tell the user when an attempted import fails. */

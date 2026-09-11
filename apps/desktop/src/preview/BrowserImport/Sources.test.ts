@@ -8,12 +8,14 @@ import {
   HostProcessHostname,
   HostProcessPlatform,
 } from "@t3tools/shared/hostProcess";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as NodeSqlite from "node:sqlite";
 
@@ -53,6 +55,7 @@ describe("Linux Chromium secret applications", () => {
         opera: "opera",
         helium: "chromium",
         firefox: undefined,
+        midway: undefined,
       },
     );
   });
@@ -1192,6 +1195,64 @@ describe("Safari profiles", () => {
           { directory: ".", name: "Safari" },
         ]);
         assert.isFalse(yield* isSourceInstalled(safari, context));
+      }),
+    ),
+  );
+});
+
+describe("Midway source", () => {
+  const midway = BROWSER_IMPORT_SOURCES.find((source) => source.id === "midway")!;
+  const jarLine = (host: string, name: string, expiry: number) =>
+    `${host}\tFALSE\t/\tTRUE\t${expiry}\t${name}\tvalue`;
+
+  it.effect("is not installed without ~/.midway/cookie and never running", () =>
+    run(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-midway-" });
+        const context = yield* sourcePathContext.pipe(
+          Effect.provideService(HostProcessEnvironment, { HOME: home }),
+          Effect.provideService(HostProcessPlatform, "darwin"),
+        );
+        assert.deepEqual(midway.platforms, ["darwin", "linux", "win32"]);
+        assert.isFalse(yield* isSourceInstalled(midway, context));
+        assert.deepEqual(yield* listSourceProfiles(midway, context), []);
+        assert.isFalse(yield* isSourceRunning(midway, context));
+      }),
+    ),
+  );
+
+  it.effect("lists a single profile counting only unexpired cookies", () =>
+    run(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-midway-" });
+        const context = yield* sourcePathContext.pipe(
+          Effect.provideService(HostProcessEnvironment, { HOME: home }),
+          Effect.provideService(HostProcessPlatform, "linux"),
+        );
+        yield* fileSystem.makeDirectory(`${home}/.midway`);
+        // `it.effect` runs on the TestClock, which starts at the epoch; move it
+        // so the stale row below is actually in the past.
+        yield* TestClock.adjust(Duration.seconds(1_000_000));
+        const future = 1_000_000 + 3600;
+        yield* fileSystem.writeFileString(
+          `${home}/.midway/cookie`,
+          [
+            "# Netscape HTTP Cookie File",
+            jarLine("midway-auth.amazon.com", "session", future),
+            jarLine("midway-auth.amazon.com", "user_name", future),
+            jarLine("stale.example.com", "old", 1),
+          ].join("\n"),
+        );
+        assert.isTrue(yield* isSourceInstalled(midway, context));
+        assert.deepEqual(yield* listSourceProfiles(midway, context), [
+          { directory: ".", name: "Midway session", cookieCount: 2 },
+        ]);
+        assert.deepEqual(cookieDatabaseCandidatePaths(midway, context, "."), [
+          `${home}/.midway/cookie`,
+        ]);
+        assert.isFalse(yield* isSourceRunning(midway, context));
       }),
     ),
   );
