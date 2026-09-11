@@ -75,6 +75,22 @@ export const isProviderDriverKind = (value: unknown): value is ProviderDriverKin
   isProviderDriverKindValue(value);
 
 /**
+ * T3 Custom: the drivers this build exposes. Upstream ships more (Cursor,
+ * Grok, OpenCode, Antigravity); their code stays in the tree so syncs merge
+ * cleanly, but the server does not register them and the web app does not
+ * list them. A stored instance of a hidden driver surfaces as "unavailable"
+ * rather than being deleted.
+ */
+export const ENABLED_PROVIDER_DRIVER_KINDS: ReadonlySet<ProviderDriverKind> = new Set([
+  ProviderDriverKind.make("codex"),
+  ProviderDriverKind.make("claudeAgent"),
+  ProviderDriverKind.make("kiro"),
+]);
+
+export const isEnabledProviderDriverKind = (driver: ProviderDriverKind): boolean =>
+  ENABLED_PROVIDER_DRIVER_KINDS.has(driver);
+
+/**
  * `ProviderInstanceId` — user-defined routing key for a configured provider
  * instance. Same slug rules as `ProviderDriverKind`; branded separately so the
  * type system cannot confuse the two.

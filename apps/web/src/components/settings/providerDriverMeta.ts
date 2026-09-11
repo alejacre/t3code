@@ -4,6 +4,7 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  isEnabledProviderDriverKind,
   KiroSettings,
   OpenCodeSettings,
   ProviderDriverKind,
@@ -45,7 +46,7 @@ export interface ProviderClientDefinition {
   readonly badgeLabel?: string;
 }
 
-const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+const ALL_PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",
@@ -92,6 +93,12 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     settingsSchema: KiroSettings,
   },
 ];
+
+/** T3 Custom: only the enabled drivers are offered or rendered with metadata. */
+const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] =
+  ALL_PROVIDER_CLIENT_DEFINITIONS.filter((definition) =>
+    isEnabledProviderDriverKind(definition.value),
+  );
 
 const PROVIDER_CLIENT_DEFINITION_BY_VALUE: Partial<
   Record<ProviderDriverKind, ProviderClientDefinition>

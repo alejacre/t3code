@@ -8,16 +8,15 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("exposes the upstream provider definitions plus Kiro", () => {
+  it("exposes only the T3 Custom enabled drivers: Codex, Claude and Kiro", () => {
     expect(Object.keys(DRIVER_OPTION_BY_VALUE).toSorted()).toEqual([
-      "antigravity",
       "claudeAgent",
       "codex",
-      "cursor",
-      "grok",
       "kiro",
-      "opencode",
     ]);
+    // Upstream drivers stay in the tree but are hidden from the app.
+    expect(DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")]).toBeUndefined();
+    expect(DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursor")]).toBeUndefined();
   });
 
   it("derives visible provider config fields from the client definition schema", () => {
@@ -47,27 +46,14 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
-  it("derives a select control with its choices for the Antigravity sign-in method", () => {
-    const antigravity = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")];
-    expect(antigravity).toBeDefined();
-
-    const fields = deriveProviderSettingsFields(antigravity!);
-    expect(fields.map((field) => field.key)).toEqual([
-      "authMethod",
-      "apiKey",
-      "gcpProject",
-      "gcpLocation",
+  it("derives the Kiro config fields in their declared order", () => {
+    const kiro = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("kiro")];
+    expect(kiro).toBeDefined();
+    expect(deriveProviderSettingsFields(kiro!).map((field) => field.key)).toEqual([
       "binaryPath",
+      "agentEngine",
+      "agent",
     ]);
-    const authMethod = fields.find((field) => field.key === "authMethod");
-    expect(authMethod).toMatchObject({ control: "select", clearWhenEmpty: "omit" });
-    expect(authMethod?.options?.map((option) => option.value)).toEqual([
-      "oauth-personal",
-      "oauth-business",
-      "gemini-api-key",
-      "agent-platform",
-    ]);
-    expect(fields.find((field) => field.key === "apiKey")?.control).toBe("password");
   });
 
   it("shows the auto-compaction threshold for Claude providers", () => {

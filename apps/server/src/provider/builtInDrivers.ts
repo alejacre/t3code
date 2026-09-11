@@ -20,6 +20,8 @@
  *
  * @module provider/builtInDrivers
  */
+import { isEnabledProviderDriverKind } from "@t3tools/contracts";
+
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
@@ -48,7 +50,7 @@ export type BuiltInDriversEnv =
  * UI presentation — the registry itself is keyed by `driverKind`, so
  * iteration order has no functional effect on instance lookup.
  */
-export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
+const ALL_BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
   ClaudeDriver,
   CursorDriver,
@@ -57,3 +59,12 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   AntigravityDriver,
   KiroDriver,
 ];
+
+/**
+ * T3 Custom: only the drivers in `ENABLED_PROVIDER_DRIVER_KINDS` are
+ * registered. The rest stay compiled in (the Kiro adapter reuses the Grok ACP
+ * adapter, and upstream syncs stay conflict-free) but never get an instance,
+ * so they are not probed at startup and do not appear in the app.
+ */
+export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> =
+  ALL_BUILT_IN_DRIVERS.filter((driver) => isEnabledProviderDriverKind(driver.driverKind));
