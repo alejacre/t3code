@@ -139,3 +139,84 @@ it.layer(NodeServices.layer)("checkKiroProviderStatus", (it) => {
     ),
   );
 });
+
+describe("Kiro agent catalog", () => {
+  const listing = [
+    "\u001b[38;5;244mWorkspace: \u001b[0m~/Desktop/.kiro/agents",
+    "\u001b[38;5;244mGlobal:    \u001b[0m~/.kiro/agents",
+    "",
+    "* kiro_default                   \u001b[38;5;244m(Built-in)\u001b[0m    Default agent",
+    "  gpu-dev                        Global        GenAI Power User agent for development tasks. Good",
+    "                                                general purpose default agent. -- ⚠️ This agent is",
+    "                                                managed by AIM. DO NOT EDIT MANUALLY.",
+    "  gpu-dev                        Workspace     duplicate shadowed by the first",
+    "  kiro_planner                   (Built-in)",
+    "  bare.name_1                    Local         Short one",
+  ].join("\n");
+
+  it("parses rows, joins wrapped descriptions and strips ANSI and the AIM stamp", () => {
+    expect(KIRO_PROVIDER_TESTING.parseKiroAgentList(listing)).toEqual([
+      { id: "kiro_default", scope: "Built-in", description: "Default agent" },
+      {
+        id: "gpu-dev",
+        scope: "Global",
+        description:
+          "GenAI Power User agent for development tasks. Good general purpose default agent.",
+      },
+      { id: "kiro_planner", scope: "Built-in" },
+      { id: "bare.name_1", scope: "Local", description: "Short one" },
+    ]);
+  });
+
+  it("builds an agent option that defaults to Kiro's default when settings name none", () => {
+    const descriptor = KIRO_PROVIDER_TESTING.buildKiroAgentDescriptor(
+      KIRO_PROVIDER_TESTING.parseKiroAgentList(listing),
+      "",
+    );
+    expect(descriptor.id).toBe("agent");
+    expect(descriptor.currentValue).toBe("kiro_default");
+    expect(descriptor.options.map((option) => option.label)).toEqual([
+      "Default",
+      "gpu-dev",
+      "kiro_planner",
+      "bare.name_1",
+    ]);
+    expect(descriptor.options.find((option) => option.isDefault)?.id).toBe("kiro_default");
+  });
+
+  it("marks the settings default agent and keeps it selectable even when unlisted", () => {
+    const descriptor = KIRO_PROVIDER_TESTING.buildKiroAgentDescriptor([], "my-agent");
+    expect(descriptor.currentValue).toBe("my-agent");
+    expect(descriptor.options.map((option) => option.id)).toEqual(["kiro_default", "my-agent"]);
+  });
+
+  it("declares /goal and /compact as composer slash commands", () => {
+    expect(KIRO_PROVIDER_TESTING.KIRO_SLASH_COMMANDS.map((command) => command.name)).toEqual([
+      "goal",
+      "goal clear",
+      "compact",
+    ]);
+  });
+});
+
+// Optional check against the locally installed Kiro CLI:
+// T3_KIRO_ACP_PROBE=1 pnpm exec vp test run src/provider/Layers/KiroProvider.test.ts
+describe.runIf(process.env.T3_KIRO_ACP_PROBE === "1")("Kiro provider live probe", () => {
+  it.effect("discovers agents from the installed CLI as the agent option", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkKiroProviderStatus(
+        decodeKiroSettings({ enabled: true }),
+        process.env,
+      );
+      const descriptor = snapshot.models[0]?.capabilities?.optionDescriptors?.find(
+        (candidate) => candidate.id === "agent",
+      );
+      expect(descriptor?.type).toBe("select");
+      if (descriptor?.type === "select") {
+        expect(descriptor.options.length).toBeGreaterThan(1);
+        expect(descriptor.options[0]?.id).toBe("kiro_default");
+      }
+      expect(snapshot.slashCommands.map((command) => command.name)).toContain("goal");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});

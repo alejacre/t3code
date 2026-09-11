@@ -12,6 +12,7 @@ import {
   RuntimeRequestId,
   type ThreadId,
   TurnId,
+  type ModelSelection,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -113,6 +114,13 @@ export interface GrokAdapterLiveOptions {
   readonly resolveModelId?: typeof resolveGrokAcpBaseModelId;
   readonly enableGrokExtensions?: boolean;
   readonly autoApproveEditPermissions?: boolean;
+  /**
+   * Model option id whose value selects the ACP session mode. Kiro exposes its
+   * agents as modes and lets the composer pick one through the `agent` option;
+   * when set, the value is passed to the runtime at spawn and re-applied with
+   * `session/set_mode` whenever a turn asks for a different one.
+   */
+  readonly sessionModeOptionId?: string;
   /** Override the conservative ACP turn liveness timeout in focused tests. */
   readonly turnInactivityTimeoutMs?: number;
   /** Override the longer active-tool liveness timeout in focused tests. */
@@ -356,12 +364,43 @@ export function grokPromptSettlementBelongsToContext(input: {
   );
 }
 
+/**
+ * Switches the ACP session to `requestedModeId` when the session advertises
+ * it and is not already in it. Unknown ids are ignored rather than failing
+ * the turn: the picker's list comes from a status probe that can lag behind
+ * the agent's actual set (an agent file added or removed since).
+ */
+export const applyAcpSessionMode = Effect.fnUntraced(function* (
+  runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "getModeState" | "setMode">,
+  requestedModeId: string | undefined,
+) {
+  if (requestedModeId === undefined) return;
+  const modeState = yield* runtime.getModeState;
+  if (modeState === undefined || modeState.currentModeId === requestedModeId) return;
+  if (!modeState.availableModes.some((mode) => mode.id === requestedModeId)) {
+    yield* Effect.logWarning("Requested ACP session mode is not available; keeping current mode", {
+      requestedModeId,
+      currentModeId: modeState.currentModeId,
+    });
+    return;
+  }
+  yield* runtime.setMode(requestedModeId);
+});
+
 export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapterLiveOptions) {
   return Effect.gen(function* () {
     const provider = options?.provider ?? GROK_PROVIDER;
     const providerLabel = options?.providerLabel ?? "Grok";
     const makeRuntime = options?.makeRuntime ?? makeGrokAcpRuntime;
     const resolveModelId = options?.resolveModelId ?? resolveGrokAcpBaseModelId;
+    const sessionModeOptionId = options?.sessionModeOptionId;
+    const requestedSessionMode = (
+      modelSelection: ModelSelection | undefined,
+    ): string | undefined =>
+      sessionModeOptionId === undefined
+        ? undefined
+        : getModelSelectionStringOptionValue(modelSelection, sessionModeOptionId)?.trim() ||
+          undefined;
     const enableGrokExtensions = options?.enableGrokExtensions ?? provider === GROK_PROVIDER;
     const autoApproveEditPermissions = options?.autoApproveEditPermissions ?? false;
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make(provider);
@@ -1012,12 +1051,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const requestedStartSessionMode = requestedSessionMode(grokModelSelection);
           const acp = yield* makeRuntime({
             grokSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
+            ...(requestedStartSessionMode ? { sessionMode: requestedStartSessionMode } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
@@ -1285,6 +1326,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             mapError: (cause) =>
               mapAcpToAdapterError(provider, input.threadId, "session/set_model", cause),
           });
+          // The spawn already asked for the mode; this covers a resumed
+          // session, which comes back in whatever mode it was left in.
+          yield* applyAcpSessionMode(acp, requestedStartSessionMode).pipe(
+            Effect.mapError((cause) =>
+              mapAcpToAdapterError(provider, input.threadId, "session/set_mode", cause),
+            ),
+          );
 
           const now = yield* nowIso;
           const session: ProviderSession = {
@@ -1616,14 +1664,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   mapAcpToAdapterError(provider, input.threadId, "session/set_model", cause),
               });
               ctx.currentModelId = currentModelId;
+              yield* applyAcpSessionMode(ctx.acp, requestedSessionMode(turnModelSelection)).pipe(
+                Effect.mapError((cause) =>
+                  mapAcpToAdapterError(provider, input.threadId, "session/set_mode", cause),
+                ),
+              );
               if (requestedTurnReasoningEffort !== undefined) {
                 ctx.currentReasoningEffort = normalizeGrokReasoningEffort(
                   requestedTurnReasoningEffort,
                 );
               }
-              const displayModel = currentModelId
-                ? resolveModelId(currentModelId)
-                : undefined;
+              const displayModel = currentModelId ? resolveModelId(currentModelId) : undefined;
               const runtimeInstructions = buildRuntimeInstructions({
                 harness: providerLabel,
                 model: displayModel,

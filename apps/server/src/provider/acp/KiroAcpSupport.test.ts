@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { buildKiroAcpSpawnInput, resolveKiroAcpBaseModelId } from "./KiroAcpSupport.ts";
+import {
+  buildKiroAcpSpawnInput,
+  KIRO_DEFAULT_AGENT_ID,
+  resolveKiroAcpBaseModelId,
+  resolveKiroAgent,
+} from "./KiroAcpSupport.ts";
 
 describe("resolveKiroAcpBaseModelId", () => {
   it("uses auto by default and preserves discovered model ids", () => {
@@ -45,5 +50,31 @@ describe("buildKiroAcpSpawnInput", () => {
       args: ["acp", "--agent-engine", "v2"],
       cwd: "/tmp/project",
     });
+  });
+});
+
+describe("per-thread agent selection", () => {
+  it("prefers the requested agent over the settings default", () => {
+    expect(
+      buildKiroAcpSpawnInput(
+        { binaryPath: "", agentEngine: "v2", agent: "settings-agent" },
+        "/tmp/project",
+        undefined,
+        "thread-agent",
+      ).args,
+    ).toEqual(["acp", "--agent-engine", "v2", "--agent", "thread-agent"]);
+  });
+
+  it("sends no --agent for Kiro's built-in default even when settings name another", () => {
+    expect(
+      buildKiroAcpSpawnInput(
+        { binaryPath: "", agentEngine: "v2", agent: "settings-agent" },
+        "/tmp/project",
+        undefined,
+        KIRO_DEFAULT_AGENT_ID,
+      ).args,
+    ).toEqual(["acp", "--agent-engine", "v2"]);
+    expect(resolveKiroAgent({ agent: "" }, undefined)).toBe(KIRO_DEFAULT_AGENT_ID);
+    expect(resolveKiroAgent({ agent: " gpu-dev " }, "  ")).toBe("gpu-dev");
   });
 });

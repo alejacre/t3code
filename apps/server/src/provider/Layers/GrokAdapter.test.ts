@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -28,6 +28,7 @@ import {
 
 import { ServerConfig } from "../../config.ts";
 import {
+  applyAcpSessionMode,
   grokPromptSettlementBelongsToContext,
   isGrokEnterPlanModeToolCall,
   makeGrokAdapter,
@@ -2544,5 +2545,59 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       // they wait on virtual time that never advances, and a regression would
       // hang until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
+  );
+});
+
+describe("applyAcpSessionMode", () => {
+  const fakeRuntime = (currentModeId: string, available: ReadonlyArray<string>) => {
+    const calls: Array<string> = [];
+    return {
+      calls,
+      runtime: {
+        getModeState: Effect.succeed({
+          currentModeId,
+          availableModes: available.map((id) => ({ id, name: id })),
+        }),
+        setMode: (modeId: string) => {
+          calls.push(modeId);
+          return Effect.succeed({});
+        },
+      },
+    };
+  };
+
+  it.effect("switches to an advertised mode that is not current", () =>
+    Effect.gen(function* () {
+      const fake = fakeRuntime("kiro_default", ["kiro_default", "gpu-dev"]);
+      yield* applyAcpSessionMode(fake.runtime, "gpu-dev");
+      expect(fake.calls).toEqual(["gpu-dev"]);
+    }),
+  );
+
+  it.effect("is a no-op for the current mode, an unknown mode, or no request", () =>
+    Effect.gen(function* () {
+      const fake = fakeRuntime("kiro_default", ["kiro_default", "gpu-dev"]);
+      yield* applyAcpSessionMode(fake.runtime, "kiro_default");
+      yield* applyAcpSessionMode(fake.runtime, "not-an-agent");
+      yield* applyAcpSessionMode(fake.runtime, undefined);
+      expect(fake.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("does nothing when the session advertised no modes", () =>
+    Effect.gen(function* () {
+      const calls: Array<string> = [];
+      yield* applyAcpSessionMode(
+        {
+          getModeState: Effect.succeed(undefined),
+          setMode: (modeId: string) => {
+            calls.push(modeId);
+            return Effect.succeed({});
+          },
+        },
+        "gpu-dev",
+      );
+      expect(calls).toEqual([]);
+    }),
   );
 });

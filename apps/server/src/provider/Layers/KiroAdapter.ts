@@ -5,7 +5,11 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 
-import { makeKiroAcpRuntime, resolveKiroAcpBaseModelId } from "../acp/KiroAcpSupport.ts";
+import {
+  KIRO_AGENT_OPTION_ID,
+  makeKiroAcpRuntime,
+  resolveKiroAcpBaseModelId,
+} from "../acp/KiroAcpSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeGrokAdapter } from "./GrokAdapter.ts";
 
@@ -28,6 +32,8 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
     providerLabel: "Kiro",
     enableGrokExtensions: false,
     autoApproveEditPermissions: true,
+    // Kiro agents are ACP session modes; the composer's "Agent" trait picks one.
+    sessionModeOptionId: KIRO_AGENT_OPTION_ID,
     resolveModelId: resolveKiroAcpBaseModelId,
     makeRuntime: ({ grokSettings: _grokSettings, runtimeMode: _runtimeMode, ...input }) =>
       makeKiroAcpRuntime({

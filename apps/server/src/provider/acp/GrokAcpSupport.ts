@@ -28,6 +28,12 @@ interface GrokAcpRuntimeInput extends Omit<
   readonly grokSettings: GrokAcpRuntimeGrokSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  /**
+   * ACP session mode the session should open in, when the adapter is
+   * configured to expose modes as a model option. Grok ignores it; runtimes
+   * that select a mode at spawn time (Kiro's `--agent`) read it.
+   */
+  readonly sessionMode?: string;
 }
 
 export function grokAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {

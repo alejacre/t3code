@@ -1047,17 +1047,36 @@ export const make = (
           ? promptDispatchSemaphore.withPermit(cancel)
           : cancel,
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+        Effect.gen(function* () {
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === modeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          // Agents that negotiated a `mode` config option take the current
+          // `session/set_config_option` route. Agents that only advertised the
+          // legacy `modes` block (Kiro, for one) reject that method with
+          // "Method not found", so for them the mode goes through the original
+          // `session/set_mode` request the modes block belongs to.
+          const configOptions = yield* Ref.get(configOptionsRef);
+          const hasModeConfigOption = findSessionConfigOption(configOptions, "mode") !== undefined;
+          if (!hasModeConfigOption && modeState !== undefined) {
+            const started = yield* getStartedState;
+            const requestPayload = {
+              sessionId: started.sessionId,
+              modeId,
+            } satisfies EffectAcpSchema.SetSessionModeRequest;
+            yield* runLoggedRequest(
+              "session/set_mode",
+              requestPayload,
+              acp.raw.request("session/set_mode", requestPayload),
             );
-          }),
-        ),
+            yield* updateCurrentModeId(modeId);
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          yield* setConfigOption("mode", modeId);
+          yield* updateCurrentModeId(modeId);
+          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(

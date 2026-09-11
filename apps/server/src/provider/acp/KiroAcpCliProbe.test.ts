@@ -59,6 +59,16 @@ describe.runIf(process.env.T3_KIRO_ACP_PROBE === "1")("Kiro ACP CLI probe", () =
       });
       expect(promptResult.stopReason).toBe("end_turn");
       expect((yield* Ref.get(output)).trim()).toBe("KIRO ACP OK");
+
+      // Kiro advertises its agents as legacy ACP session modes and switches
+      // them with `session/set_mode`, not `session/set_config_option`.
+      const modes = yield* runtime.getModeState;
+      expect(modes?.currentModeId).toBe("kiro_default");
+      const other = modes?.availableModes.find((mode) => mode.id !== modes.currentModeId);
+      if (other) {
+        yield* runtime.setMode(other.id);
+        expect((yield* runtime.getModeState)?.currentModeId).toBe(other.id);
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
