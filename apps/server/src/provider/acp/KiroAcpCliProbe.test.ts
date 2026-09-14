@@ -7,12 +7,23 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { KiroSettings, type ProviderRuntimeEvent, ThreadId } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
+import { ServerConfig } from "../../config.ts";
+import { makeKiroAdapter } from "../Layers/KiroAdapter.ts";
 import { makeKiroAcpRuntime } from "./KiroAcpSupport.ts";
+
+const kiroAdapterProbeLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3code-kiro-probe-",
+}).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe.runIf(process.env.T3_KIRO_ACP_PROBE === "1")("Kiro ACP CLI probe", () => {
   it.effect("starts a real Kiro session and advertises typed models", () =>
@@ -70,5 +81,66 @@ describe.runIf(process.env.T3_KIRO_ACP_PROBE === "1")("Kiro ACP CLI probe", () =
         expect((yield* runtime.getModeState)?.currentModeId).toBe(other.id);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "rewinds a Kiro thread through /rewind and continues on the forked session",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* Schema.decodeUnknownEffect(KiroSettings)({
+          enabled: true,
+          binaryPath: "kiro-cli",
+        });
+        const adapter = yield* makeKiroAdapter(settings, { environment: process.env });
+        const threadId = ThreadId.make("kiro-rewind-probe");
+        const completedTurns: Array<Extract<ProviderRuntimeEvent, { type: "turn.completed" }>> = [];
+        let assistantText = "";
+        const turnDone = yield* Ref.make(yield* Deferred.make<void>());
+        yield* Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.gen(function* () {
+            if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+              assistantText += event.payload.delta;
+            }
+            if (event.type === "turn.completed") {
+              completedTurns.push(event);
+              yield* Deferred.succeed(yield* Ref.get(turnDone), undefined);
+            }
+          }),
+        ).pipe(Effect.forkScoped);
+        const runTurn = (input: string) =>
+          Effect.gen(function* () {
+            const done = yield* Deferred.make<void>();
+            yield* Ref.set(turnDone, done);
+            assistantText = "";
+            yield* adapter.sendTurn({ threadId, input });
+            yield* Deferred.await(done).pipe(Effect.timeout("120 seconds"));
+            return assistantText;
+          });
+
+        const session = yield* adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        });
+        const originalSessionId = (session.resumeCursor as { sessionId: string }).sessionId;
+        expect(adapter.capabilities.supportsConversationRollback).toBe(true);
+        yield* runTurn("Reply with exactly: ONE. Do not use tools.");
+        yield* runTurn("Reply with exactly: TWO. Do not use tools.");
+
+        yield* adapter.rollbackThread(threadId, 1);
+        const rewound = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+        const rewoundSessionId = (rewound?.resumeCursor as { sessionId: string } | undefined)
+          ?.sessionId;
+        expect(rewoundSessionId).toBeTypeOf("string");
+        expect(rewoundSessionId).not.toBe(originalSessionId);
+
+        const recalled = yield* runTurn(
+          "Which exact words did I ask you to reply with earlier in this conversation? List them all, nothing else.",
+        );
+        expect(recalled).toContain("ONE");
+        expect(recalled).not.toContain("TWO");
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.scoped, Effect.provide(kiroAdapterProbeLayer)),
+    { timeout: 300_000 },
   );
 });

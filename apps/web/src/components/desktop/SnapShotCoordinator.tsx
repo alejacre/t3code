@@ -1,6 +1,6 @@
 import {
   type DesktopPendingSnapShot,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  providerSendTurnMaxImageBytes,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef } from "react";
@@ -140,7 +140,13 @@ export async function deliverSnapShot(
   updateSnapShotAnimationSource(item.id, item.source);
   const capture = await bridge.readSnapShot(item.id);
   const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
-  const compressed = await compressImageToByteLimit(original, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+  // Default provider instances share their driver's id ("kiro"), which is
+  // enough to pick Kiro's tighter Bedrock image cap; the server still guards
+  // custom instances with a clear error.
+  const compressed = await compressImageToByteLimit(
+    original,
+    providerSendTurnMaxImageBytes(store.getComposerDraft(target)?.activeProvider ?? undefined),
+  );
   if (!compressed.ok) {
     finishSnapShotAnimation(item.id);
     throw new Error("The captured window is too large to attach.");

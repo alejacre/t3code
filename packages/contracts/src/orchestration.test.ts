@@ -33,6 +33,9 @@ import {
   ThreadTurnStartRequestedPayload,
   SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
+  KIRO_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  providerSendTurnMaxImageBytes,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -1513,4 +1516,12 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});
+
+it("providerSendTurnMaxImageBytes tightens the cap for Kiro and keeps the wire cap elsewhere", () => {
+  assert.strictEqual(providerSendTurnMaxImageBytes("kiro"), KIRO_SEND_TURN_MAX_IMAGE_BYTES);
+  assert.strictEqual(providerSendTurnMaxImageBytes("codex"), PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+  assert.strictEqual(providerSendTurnMaxImageBytes(undefined), PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+  // Bedrock caps the base64 payload at 5 MiB; raw bytes must stay under 3/4 of that.
+  assert.isBelow(KIRO_SEND_TURN_MAX_IMAGE_BYTES, (5 * 1024 * 1024 * 3) / 4);
 });

@@ -41,6 +41,11 @@ const RequestPermissionRequest = jsonRpcRequest(
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+const JsonRpcErrorResponse = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  id: Schema.Number,
+  error: AcpSchema.Error,
+});
 const decodeSessionCancelNotification = Schema.decodeEffect(
   Schema.fromJsonString(SessionCancelNotification),
 );
@@ -581,6 +586,51 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
           value: {
             ok: true,
           },
+        },
+      });
+    }),
+  );
+
+  it.effect("surfaces plain JSON-RPC error responses as typed failures", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+      const received = yield* Deferred.make<unknown>();
+
+      yield* transport.clientProtocol
+        .run(0, (message) => Deferred.succeed(received, message).pipe(Effect.asVoid))
+        .pipe(Effect.forkScoped);
+
+      // What Kiro CLI answers when Bedrock rejects an oversized image: a
+      // standard JSON-RPC error, not Effect's `_tag: "Cause"` envelope.
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(JsonRpcErrorResponse, {
+          jsonrpc: "2.0",
+          id: 0,
+          error: { code: -32603, message: "Internal error", data: { detail: "image too large" } },
+        }),
+      );
+
+      const message = yield* Deferred.await(received);
+      assert.deepEqual(message, {
+        _tag: "Exit",
+        requestId: 0,
+        exit: {
+          _tag: "Failure",
+          cause: [
+            {
+              _tag: "Fail",
+              error: {
+                code: -32603,
+                message: "Internal error",
+                data: { detail: "image too large" },
+              },
+            },
+          ],
         },
       });
     }),

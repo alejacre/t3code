@@ -35,8 +35,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  providerSendTurnMaxImageBytes,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import {
@@ -5257,11 +5257,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const nextImages: ComposerImageAttachment[] = [];
       let compressionError: string | null = null;
       for (const file of acceptedImages) {
-        // Images over the wire cap are downscaled to fit rather than
-        // refused; files already within it pass through byte-for-byte.
+        // Images over the cap are downscaled to fit rather than refused;
+        // files already within it pass through byte-for-byte. The cap follows
+        // the provider that will run the turn: Kiro relays images to Bedrock,
+        // which rejects anything over ~3.9 MB, well under the generic 10 MB.
         const compressed = await prepareImageForAttachment(
           file,
-          PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+          providerSendTurnMaxImageBytes(selectedProvider),
         );
         if (!compressed.ok) {
           compressionError =

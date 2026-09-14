@@ -1,8 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 
+import { TurnId } from "@t3tools/contracts";
+
+import { countPromptsToDrop } from "../Layers/GrokAdapter.ts";
 import {
   buildKiroAcpSpawnInput,
   KIRO_DEFAULT_AGENT_ID,
+  kiroPromptEntryIndices,
+  kiroSessionHistoryPath,
+  parseKiroRewoundSessionId,
+  planKiroRewind,
   resolveKiroAcpBaseModelId,
   resolveKiroAgent,
 } from "./KiroAcpSupport.ts";
@@ -76,5 +83,57 @@ describe("per-thread agent selection", () => {
     ).toEqual(["acp", "--agent-engine", "v2"]);
     expect(resolveKiroAgent({ agent: "" }, undefined)).toBe(KIRO_DEFAULT_AGENT_ID);
     expect(resolveKiroAgent({ agent: " gpu-dev " }, "  ")).toBe("gpu-dev");
+  });
+});
+
+const history = [
+  { version: "v1", kind: "Prompt", data: { content: [{ kind: "text", data: "ONE" }] } },
+  { version: "v1", kind: "AssistantMessage", data: { content: [{ kind: "toolUse" }] } },
+  { version: "v1", kind: "ToolResults", data: {} },
+  { version: "v1", kind: "AssistantMessage", data: { content: [{ kind: "text", data: "one" }] } },
+  { version: "v1", kind: "Prompt", data: { content: [{ kind: "text", data: "TWO" }] } },
+  { version: "v1", kind: "AssistantMessage", data: { content: [{ kind: "text", data: "two" }] } },
+  { version: "v1", kind: "Prompt", data: { content: [{ kind: "text", data: "THREE" }] } },
+  { version: "v1", kind: "AssistantMessage", data: { content: [{ kind: "text", data: "three" }] } },
+]
+  .map((entry) => JSON.stringify(entry))
+  .join("\n");
+
+describe("Kiro conversation rewind", () => {
+  it("locates the Prompt entries in a session history", () => {
+    expect(kiroPromptEntryIndices(history)).toEqual([0, 4, 6]);
+    expect(kiroPromptEntryIndices("")).toEqual([]);
+    expect(kiroPromptEntryIndices("not json\n" + history)).toEqual([1, 5, 7]);
+  });
+
+  it("rewinds to the prompt that starts the last surviving turn", () => {
+    expect(planKiroRewind(history, 1)).toEqual({ _tag: "command", command: "/rewind 4" });
+    expect(planKiroRewind(history, 2)).toEqual({ _tag: "command", command: "/rewind 0" });
+    expect(planKiroRewind(history, 3)).toEqual({ _tag: "fresh" });
+    expect(planKiroRewind(history, 7)).toEqual({ _tag: "fresh" });
+  });
+
+  it("parses the forked session id from Kiro's reply", () => {
+    expect(
+      parseKiroRewoundSessionId(
+        "Rewound to earlier turn (new session 29EB76FF-0916-4eca-a195-5f062900c489)",
+      ),
+    ).toBe("29eb76ff-0916-4eca-a195-5f062900c489");
+    expect(parseKiroRewoundSessionId("Entry at index 1 is not a user prompt.")).toBeUndefined();
+    expect(kiroSessionHistoryPath("/Users/alice", "abc")).toBe(
+      "/Users/alice/.kiro/sessions/cli/abc.jsonl",
+    );
+  });
+
+  it("counts steer prompts inside the dropped turns and assumes one per unseen turn", () => {
+    const [a, b, c] = [TurnId.make("a"), TurnId.make("b"), TurnId.make("c")];
+    // Turn b was steered once, so it holds two prompts.
+    const dispatched = [a, b, b, c];
+    expect(countPromptsToDrop(dispatched, 1)).toBe(1);
+    expect(countPromptsToDrop(dispatched, 2)).toBe(3);
+    expect(countPromptsToDrop(dispatched, 3)).toBe(4);
+    // Two turns predate this process: one prompt each.
+    expect(countPromptsToDrop(dispatched, 5)).toBe(6);
+    expect(countPromptsToDrop([], 2)).toBe(2);
   });
 });

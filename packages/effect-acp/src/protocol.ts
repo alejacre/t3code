@@ -372,9 +372,10 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     return Queue.offer(serverQueue, message).pipe(Effect.asVoid);
   };
 
-  const handleExitEncoded = (message: RpcMessage.ResponseExitEncoded) =>
+  const handleExitEncoded = (rawMessage: RpcMessage.ResponseExitEncoded) =>
     Ref.get(extPending).pipe(
       Effect.flatMap((pending) => {
+        const message = normalizeJsonRpcErrorExit(rawMessage);
         const pendingRequest = pending.get(String(message.requestId));
         if (!pendingRequest) {
           return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
@@ -625,4 +626,30 @@ function isProtocolError(
     "message" in value &&
     typeof value.message === "string"
   );
+}
+
+/**
+ * Real agents (Kiro CLI, Grok CLI, Cursor) answer a failed request with a
+ * plain JSON-RPC `error: { code, message, data }`. Effect's ndJsonRpc
+ * serialization only recognises its own `_tag: "Cause"` envelope, so it wraps
+ * that object as a `Die` defect, and the client-side error schema declared on
+ * each RPC never gets a chance to decode it. Downstream this surfaced as a
+ * bare `Error("Internal error")` with `code` and `data` gone. Re-tag such
+ * defects as a `Fail` so the request fails with a typed `AcpSchema.Error`.
+ */
+function normalizeJsonRpcErrorExit(
+  message: RpcMessage.ResponseExitEncoded,
+): RpcMessage.ResponseExitEncoded {
+  if (message.exit._tag !== "Failure") return message;
+  const cause = message.exit.cause;
+  if (cause.some((entry) => entry._tag === "Fail")) return message;
+  let changed = false;
+  const normalized = cause.map((entry) => {
+    if (entry._tag === "Die" && isProtocolError(entry.defect)) {
+      changed = true;
+      return { _tag: "Fail" as const, error: entry.defect };
+    }
+    return entry;
+  });
+  return changed ? { ...message, exit: { _tag: "Failure", cause: normalized } } : message;
 }

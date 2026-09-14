@@ -166,6 +166,20 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/**
+ * Kiro forwards images to Bedrock as base64, and Bedrock rejects any single
+ * image whose encoded payload exceeds 5 MiB (5,242,880 bytes), which is about
+ * 3.93 MB of raw image data. Probed against kiro-cli 2.21.4: a 3.6 MB PNG is
+ * accepted, a 4.7 MB PNG fails with "image exceeds 5 MB maximum". Rounded down
+ * to leave room for base64 padding.
+ */
+export const KIRO_SEND_TURN_MAX_IMAGE_BYTES = 3_900_000;
+/** Per-driver image byte cap; falls back to the generic wire cap. */
+export function providerSendTurnMaxImageBytes(driverKind: string | undefined): number {
+  return driverKind === "kiro"
+    ? KIRO_SEND_TURN_MAX_IMAGE_BYTES
+    : PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
+}
 export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES = [
   "image/gif",

@@ -45,6 +45,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
+  type ProviderAdapterError,
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -107,6 +108,21 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   return Exit.isSuccess(result) ? result.value : undefined;
 }
 
+function formatMegabytes(bytes: number): string {
+  return (bytes / 1_000_000).toFixed(1);
+}
+
+/**
+ * Turn-level error shown to the user when `session/prompt` fails. Request
+ * errors carry what the agent said (code, message, data); anything else keeps
+ * the adapter error's own message.
+ */
+function formatPromptFailureMessage(providerLabel: string, error: ProviderAdapterError): string {
+  return error._tag === "ProviderAdapterRequestError"
+    ? `${providerLabel} prompt request failed: ${error.detail}`
+    : error.message;
+}
+
 export interface GrokAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
@@ -129,6 +145,38 @@ export interface GrokAdapterLiveOptions {
   readonly turnInactivityTimeoutMs?: number;
   /** Override the longer active-tool liveness timeout in focused tests. */
   readonly activeToolInactivityTimeoutMs?: number;
+  /**
+   * Largest image (raw bytes) the agent's model accepts in one prompt. The
+   * composer already shrinks images to this cap; the guard here turns anything
+   * that slipped past (provider switched after attaching, older clients) into a
+   * clear error instead of the agent's opaque "Internal error".
+   */
+  readonly maxImageBytes?: number;
+  /**
+   * Provider-side conversation rewind for agents that expose it as a slash
+   * command (Kiro's `/rewind` forks the session at an earlier turn). When set,
+   * the adapter advertises `supportsConversationRollback` and `rollbackThread`
+   * runs the command in a throwaway runtime loaded on the current session,
+   * then restarts the thread on the session the agent hands back.
+   */
+  readonly conversationRewind?: AcpConversationRewind;
+}
+
+export interface AcpConversationRewind {
+  /**
+   * Decide how to drop the last `promptsToDrop` prompts of the ACP session:
+   * `fresh` starts the thread over on a new session, `command` is the prompt
+   * text the agent executes to fork itself at an earlier turn.
+   */
+  readonly plan: (input: {
+    readonly acpSessionId: string;
+    readonly promptsToDrop: number;
+  }) => Effect.Effect<
+    { readonly _tag: "fresh" } | { readonly _tag: "command"; readonly command: string },
+    ProviderAdapterError
+  >;
+  /** Session id the agent moved the conversation to, parsed from its reply. */
+  readonly parseSessionId: (replyText: string) => string | undefined;
 }
 
 interface PendingApproval {
@@ -192,6 +240,34 @@ interface GrokSessionContext {
   stopped: boolean;
   /** Live monitor/shell identities and their originating turns. */
   readonly backgroundTasks: Map<string, GrokBackgroundTaskRecord>;
+  /** Input the session was started with, replayed on a rewind restart. */
+  readonly startInput: Parameters<GrokAdapterShape["startSession"]>[0];
+  /**
+   * Turn id of every `session/prompt` this process dispatched, in order.
+   * Steers add extra prompts to a turn, so a rewind needs this to map T3
+   * turns back onto agent prompts.
+   */
+  readonly dispatchedPromptTurnIds: Array<TurnId>;
+}
+
+/**
+ * How many agent prompts the last `numTurns` T3 turns consumed. Turns this
+ * process saw are counted exactly; older ones (before a restart) are assumed
+ * to be one prompt each.
+ */
+export function countPromptsToDrop(
+  dispatchedPromptTurnIds: ReadonlyArray<TurnId>,
+  numTurns: number,
+): number {
+  const distinctTurns: Array<TurnId> = [];
+  for (const turnId of dispatchedPromptTurnIds) {
+    if (!distinctTurns.includes(turnId)) distinctTurns.push(turnId);
+  }
+  if (numTurns <= distinctTurns.length) {
+    const dropped = new Set(distinctTurns.slice(distinctTurns.length - numTurns));
+    return dispatchedPromptTurnIds.filter((turnId) => dropped.has(turnId)).length;
+  }
+  return dispatchedPromptTurnIds.length + (numTurns - distinctTurns.length);
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -397,6 +473,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
   return Effect.gen(function* () {
     const provider = options?.provider ?? GROK_PROVIDER;
     const providerLabel = options?.providerLabel ?? "Grok";
+    const maxImageBytes = options?.maxImageBytes;
     const makeRuntime = options?.makeRuntime ?? makeGrokAcpRuntime;
     const resolveModelId = options?.resolveModelId ?? resolveGrokAcpBaseModelId;
     const sessionModeOptionId = options?.sessionModeOptionId;
@@ -993,7 +1070,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       return Effect.succeed(ctx);
     };
 
-    const stopSessionInternal = (ctx: GrokSessionContext) =>
+    const stopSessionInternal = (
+      ctx: GrokSessionContext,
+      stopOptions?: { readonly emitExitEvent?: boolean },
+    ) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
@@ -1004,6 +1084,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
+        if (stopOptions?.emitExitEvent === false) return;
         yield* offerRuntimeEvent({
           type: "session.exited",
           ...(yield* makeEventStamp()),
@@ -1374,6 +1455,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             pendingApprovals,
             pendingUserInputs,
             turns: [],
+            startInput: input,
+            dispatchedPromptTurnIds: [],
             lastPlanFingerprint: undefined,
             lastKnownProposedPlanMarkdown: undefined,
             lastKnownProposedPlanTurnId: undefined,
@@ -1666,6 +1749,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                           }),
                       ),
                     );
+                    if (maxImageBytes !== undefined && bytes.byteLength > maxImageBytes) {
+                      return yield* new ProviderAdapterRequestError({
+                        provider: provider,
+                        method: "session/prompt",
+                        detail: `${providerLabel} accepts images up to ${formatMegabytes(maxImageBytes)} MB; '${attachment.name}' is ${formatMegabytes(bytes.byteLength)} MB. Attach a smaller or downscaled image.`,
+                      });
+                    }
                     return {
                       type: "image",
                       data: Buffer.from(bytes).toString("base64"),
@@ -1823,6 +1913,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 return { _tag: "Skipped" as const, interrupted: true };
               }
               const dispatched = yield* Deferred.make<void>();
+              liveCtx.dispatchedPromptTurnIds.push(prepared.turnId);
               const fiber = yield* liveCtx.acp
                 .prompt(
                   {
@@ -1884,7 +1975,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             Effect.tapError((error) =>
               Ref.set(
                 promptFailureMessageRef,
-                mapAcpToAdapterError(provider, input.threadId, "session/prompt", error).message,
+                formatPromptFailureMessage(
+                  providerLabel,
+                  mapAcpToAdapterError(provider, input.threadId, "session/prompt", error),
+                ),
               ).pipe(Effect.andThen(prepared.acp.drainEvents)),
             ),
             Effect.mapError((error) =>
@@ -2201,9 +2295,73 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         return { threadId, turns: ctx.turns };
       });
 
+    /**
+     * Runs the agent's rewind command in a throwaway runtime loaded on the
+     * current session and returns the session id the agent forked to. The live
+     * runtime is not used so the command's reply never reaches the thread.
+     */
+    const runConversationRewind = (
+      rewind: AcpConversationRewind,
+      ctx: GrokSessionContext,
+      command: string,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const helperScope = yield* Scope.Scope;
+          const helper = yield* makeRuntime({
+            grokSettings,
+            ...(options?.environment ? { environment: options.environment } : {}),
+            childProcessSpawner,
+            cwd: ctx.session.cwd ?? path.resolve(ctx.startInput.cwd?.trim() ?? ""),
+            runtimeMode: ctx.session.runtimeMode,
+            resumeSessionId: ctx.acpSessionId,
+            clientInfo: { name: "t3-code", version: "0.0.0" },
+          }).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(Scope.Scope, helperScope),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: provider,
+                  threadId: ctx.threadId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+          const replyChunks: Array<string> = [];
+          const collector = yield* Stream.runForEach(helper.getEvents(), (event) =>
+            event._tag === "EventStreamBarrier"
+              ? Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid)
+              : Effect.sync(() => {
+                  if (event._tag === "ContentDelta") replyChunks.push(event.text);
+                }),
+          ).pipe(Effect.forkScoped);
+          const mapError = (method: string) => (error: EffectAcpErrors.AcpError) =>
+            mapAcpToAdapterError(provider, ctx.threadId, method, error);
+          yield* helper.start().pipe(Effect.mapError(mapError("session/load")));
+          replyChunks.length = 0;
+          yield* helper
+            .prompt({ prompt: [{ type: "text", text: command }] })
+            .pipe(Effect.mapError(mapError("session/prompt")));
+          yield* helper.drainEvents;
+          yield* Fiber.interrupt(collector);
+          const replyText = replyChunks.join("");
+          const sessionId = rewind.parseSessionId(replyText);
+          if (!sessionId) {
+            return yield* new ProviderAdapterRequestError({
+              provider: provider,
+              method: "thread/rollback",
+              detail: `${providerLabel} did not report a rewound session. Reply: ${replyText.trim().slice(0, 200) || "(empty)"}`,
+            });
+          }
+          return sessionId;
+        }),
+      );
+
     const rollbackThread: GrokAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
-        yield* requireSession(threadId);
+        const ctx = yield* requireSession(threadId);
         if (!Number.isInteger(numTurns) || numTurns < 1) {
           return yield* new ProviderAdapterValidationError({
             provider: provider,
@@ -2211,11 +2369,41 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             issue: "numTurns must be an integer >= 1.",
           });
         }
-        return yield* new ProviderAdapterRequestError({
-          provider: provider,
-          method: "thread/rollback",
-          detail: `${providerLabel} ACP sessions do not support provider-side rollback yet.`,
+        const rewind = options?.conversationRewind;
+        if (!rewind) {
+          return yield* new ProviderAdapterRequestError({
+            provider: provider,
+            method: "thread/rollback",
+            detail: `${providerLabel} ACP sessions do not support provider-side rollback yet.`,
+          });
+        }
+        if (ctx.promptsInFlight > 0 || ctx.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterRequestError({
+            provider: provider,
+            method: "thread/rollback",
+            detail: "Interrupt the current turn before rewinding the conversation.",
+          });
+        }
+        const plan = yield* rewind.plan({
+          acpSessionId: ctx.acpSessionId,
+          promptsToDrop: countPromptsToDrop(ctx.dispatchedPromptTurnIds, numTurns),
         });
+        // The helper below loads the same agent session, so the live runtime
+        // has to release it first.
+        yield* withThreadLock(threadId, stopSessionInternal(ctx, { emitExitEvent: false }));
+        const resumeSessionId =
+          plan._tag === "command"
+            ? yield* runConversationRewind(rewind, ctx, plan.command)
+            : undefined;
+        const { resumeCursor: _previousCursor, ...restartInput } = ctx.startInput;
+        yield* startSession({
+          ...restartInput,
+          runtimeMode: ctx.session.runtimeMode,
+          ...(resumeSessionId
+            ? { resumeCursor: { schemaVersion: GROK_RESUME_VERSION, sessionId: resumeSessionId } }
+            : {}),
+        });
+        return yield* readThread(threadId);
       });
 
     const stopSession: GrokAdapterShape["stopSession"] = (threadId) =>
@@ -2237,7 +2425,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       });
 
     const stopAll: GrokAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
+      Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
+        discard: true,
+      });
 
     yield* Effect.addFinalizer(() =>
       Effect.ignore(stopAll()).pipe(
@@ -2250,7 +2440,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     return {
       provider: provider,
-      capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        supportsConversationRollback: options?.conversationRewind !== undefined,
+      },
       compaction: { type: "slash-command", command: "/compact" },
       startSession,
       sendTurn,

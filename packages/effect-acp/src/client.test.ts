@@ -31,6 +31,11 @@ const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const PromptRequest = jsonRpcRequest("session/prompt", AcpSchema.PromptRequest);
+const JsonRpcErrorResponse = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  id: Schema.Union([Schema.String, Schema.Number]),
+  error: AcpSchema.Error,
+});
 const PromptResponse = jsonRpcResponse(AcpSchema.PromptResponse);
 const SessionUpdateNotification = jsonRpcNotification(
   "session/update",
@@ -688,6 +693,43 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
 
       yield* Fiber.join(initializeFiber);
       assert.deepEqual(yield* Fiber.join(extFiber), { ok: true });
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
+  it.effect("fails a prompt with a typed AcpRequestError on a plain JSON-RPC error", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+
+      const promptFiber = yield* acp.agent
+        .prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "hello" }] })
+        .pipe(Effect.forkScoped);
+      const outbound = yield* Queue.take(output);
+      const request = yield* Schema.decodeEffect(Schema.fromJsonString(PromptRequest))(outbound);
+
+      // Kiro CLI relays Bedrock rejections as a bare JSON-RPC error object.
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(JsonRpcErrorResponse, {
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32603, message: "Internal error", data: { detail: "image too large" } },
+        }),
+      );
+
+      const exit = yield* Fiber.await(promptFiber);
+      if (exit._tag !== "Failure") {
+        assert.fail("Expected the prompt to fail");
+      }
+      const error = Cause.squash(exit.cause);
+      assert.instanceOf(error, AcpError.AcpRequestError);
+      const requestError = error as AcpError.AcpRequestError;
+      assert.equal(requestError.code, -32603);
+      assert.equal(requestError.message, "Internal error");
+      assert.equal(requestError.method, "session/prompt");
+      assert.deepEqual(requestError.data, { detail: "image too large" });
       yield* Scope.close(scope, Exit.void);
     }),
   );
