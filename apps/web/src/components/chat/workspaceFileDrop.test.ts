@@ -8,6 +8,7 @@ import {
 function makeDragEvent(options?: {
   types?: string[];
   files?: File[];
+  items?: DataTransferItem[];
   movedWithinTarget?: boolean;
 }) {
   const preventDefault = vi.fn();
@@ -15,6 +16,7 @@ function makeDragEvent(options?: {
     dataTransfer: {
       types: options?.types ?? ["Files"],
       files: options?.files ?? [],
+      items: options?.items,
       dropEffect: "none",
     },
     relatedTarget: options?.movedWithinTarget ? ({} as EventTarget) : null,
@@ -74,5 +76,71 @@ describe("makeWorkspaceFileDropHandlers", () => {
 
     expect(setDragActive).toHaveBeenCalledWith(false);
     expect(addFiles).toHaveBeenCalledWith([file]);
+  });
+
+  it("archives dropped folders and adds the archive as a file", async () => {
+    const plain = new File(["x"], "notes.txt", { type: "text/plain" });
+    const placeholder = new File([], "proj", { type: "" });
+    const archive = new File(["zip"], "proj.zip", { type: "application/zip" });
+    const directoryEntry = {
+      name: "proj",
+      isDirectory: true,
+      isFile: false,
+      createReader: () => ({
+        readEntries: (onSuccess: (entries: never[]) => void) => onSuccess([]),
+      }),
+    } as unknown as FileSystemEntry;
+    const items = [
+      { kind: "file", webkitGetAsEntry: () => directoryEntry },
+      { kind: "file", webkitGetAsEntry: () => null },
+    ] as unknown as DataTransferItem[];
+    const { host, addFiles } = makeHost();
+    const onDirectoryArchived = vi.fn();
+    const archiver = vi.fn(async () => ({ archive, fileCount: 3 }));
+    const { event } = makeDragEvent({ files: [placeholder, plain], items });
+
+    makeWorkspaceFileDropHandlers(
+      { ...host, onDirectoryArchived },
+      { archiveDirectory: archiver },
+    ).onDrop(event);
+    await vi.waitFor(() => expect(addFiles).toHaveBeenCalledTimes(2));
+
+    expect(addFiles).toHaveBeenNthCalledWith(1, [plain]);
+    expect(addFiles).toHaveBeenNthCalledWith(2, [archive]);
+    expect(archiver).toHaveBeenCalledOnce();
+    expect(onDirectoryArchived).toHaveBeenCalledWith({
+      directoryName: "proj",
+      archive,
+      fileCount: 3,
+    });
+  });
+
+  it("reports folders that fail to archive without touching the composer", async () => {
+    const directoryEntry = {
+      name: "big",
+      isDirectory: true,
+      isFile: false,
+      createReader: () => ({
+        readEntries: (onSuccess: (entries: never[]) => void) => onSuccess([]),
+      }),
+    } as unknown as FileSystemEntry;
+    const items = [
+      { kind: "file", webkitGetAsEntry: () => directoryEntry },
+    ] as unknown as DataTransferItem[];
+    const { host, addFiles } = makeHost();
+    const onDirectoryError = vi.fn();
+    const archiver = vi.fn(async () => {
+      throw new Error("Folder 'big' is too large to attach.");
+    });
+    const { event } = makeDragEvent({ files: [new File([], "big")], items });
+
+    makeWorkspaceFileDropHandlers(
+      { ...host, onDirectoryError },
+      { archiveDirectory: archiver },
+    ).onDrop(event);
+    await vi.waitFor(() => expect(onDirectoryError).toHaveBeenCalledOnce());
+
+    expect(onDirectoryError).toHaveBeenCalledWith("Folder 'big' is too large to attach.");
+    expect(addFiles).not.toHaveBeenCalled();
   });
 });

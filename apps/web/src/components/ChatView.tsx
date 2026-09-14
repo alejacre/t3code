@@ -459,7 +459,10 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
-import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
+import {
+  clampFileAttachmentUploadBytes,
+  formatAttachmentSize,
+} from "@t3tools/client-runtime/state/attachments";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { fileAttachmentCapabilityBlockReason } from "./chat/composerAttachmentFiles";
 import { assetEnvironment } from "../state/assets";
@@ -8623,6 +8626,19 @@ export default function ChatView(props: ChatViewProps) {
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
+    onDirectoryArchived: ({ directoryName, archive, fileCount }) => {
+      toastManager.add({
+        type: "info",
+        title: `Folder "${directoryName}" attached as ${archive.name}`,
+        description: `${fileCount} file${fileCount === 1 ? "" : "s"} · ${formatAttachmentSize(
+          archive.size,
+        )} · Ask the agent to extract it into the workspace.`,
+        data: { hideCopyButton: true },
+      });
+    },
+    onDirectoryError: (message) => {
+      toastManager.add({ type: "error", title: message });
+    },
   });
 
   return (
