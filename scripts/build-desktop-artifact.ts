@@ -3542,6 +3542,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
         shell: spawnCommand.shell,
+        // The web bundle bakes `import.meta.env.APP_VERSION` from this variable
+        // (falling back to package.json). Without it, Settings > About reports
+        // the manifest version while the Electron bundle carries the release
+        // or nightly version passed to this script.
+        env: { ...process.env, APP_VERSION: appVersion },
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
     );
