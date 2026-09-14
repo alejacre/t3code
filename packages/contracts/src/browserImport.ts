@@ -151,6 +151,54 @@ export const BrowserImportResult = Schema.Struct({
 });
 export type BrowserImportResult = typeof BrowserImportResult.Type;
 
+/**
+ * T3 Custom: one-click Midway refresh from the preview toolbar. Unlike the
+ * full import, this copies only the Midway SSO cookies, so it can read Chrome
+ * while Chrome is running (the live jar is snapshotted, never opened for
+ * write) and falls back to the `mwinit` jar when Chrome has no live session.
+ */
+export const MidwaySessionSource = Schema.Literals(["chrome", "midway"]);
+export type MidwaySessionSource = typeof MidwaySessionSource.Type;
+
+export const DesktopPreviewRefreshMidwayInputSchema = Schema.Struct({
+  environmentId: TrimmedNonEmptyString,
+  targetProfileId: BrowserProfileId,
+});
+
+export const MidwayRefreshResult = Schema.Struct({
+  /** Where the live session came from. */
+  source: MidwaySessionSource,
+  /** Chrome profile name the session was read from, when `source` is chrome. */
+  sourceProfileName: Schema.optional(TrimmedNonEmptyString),
+  imported: Schema.Int,
+  skipped: Schema.Int,
+  /** ISO timestamp the imported `session` cookie expires at, when known. */
+  sessionExpiresAt: Schema.optional(TrimmedNonEmptyString),
+});
+export type MidwayRefreshResult = typeof MidwayRefreshResult.Type;
+
+/**
+ * Why a Midway refresh found nothing to import. Mirrors the failure copy
+ * pattern used by the import wizard: the token rides in the error message
+ * over IPC and maps back to user-facing text in the renderer.
+ */
+export const MidwayRefreshFailureReason = Schema.Literals([
+  "noLiveSession",
+  "needsKeychainApproval",
+  "sessionUnavailable",
+  "readFailed",
+]);
+export type MidwayRefreshFailureReason = typeof MidwayRefreshFailureReason.Type;
+
+export const MIDWAY_REFRESH_FAILURE_COPY: Readonly<Record<MidwayRefreshFailureReason, string>> = {
+  noLiveSession:
+    "No live Midway session found in Chrome or ~/.midway/cookie. Sign in to Midway in Chrome or run `mwinit -o`, then retry.",
+  needsKeychainApproval:
+    "Chrome's cookie key needs Keychain access. Click Always Allow in the prompt, then retry.",
+  sessionUnavailable: "The browser profile could not be opened.",
+  readFailed: "Chrome's cookie database could not be read.",
+};
+
 const BROWSER_IMPORT_UNAVAILABLE_COPY: Readonly<Record<BrowserImportUnavailableReason, string>> = {
   notInstalled: "Not installed on this machine.",
   needsKeychainApproval: "Needs Keychain access to read its cookies.",

@@ -20,6 +20,8 @@ import {
   BrowserImportSource,
   DesktopPreviewClearDataInputSchema,
   DesktopPreviewImportCookiesInputSchema,
+  DesktopPreviewRefreshMidwayInputSchema,
+  MidwayRefreshResult,
   DesktopPreviewCreateTabInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
@@ -34,6 +36,7 @@ import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
+import * as MidwayRefresh from "../../preview/BrowserImport/MidwayRefresh.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import { PREVIEW_WEBVIEW_PREFERENCES } from "../../preview/WebviewPreferences.ts";
 import * as IpcChannels from "../channels.ts";
@@ -320,6 +323,28 @@ export const importBrowserCookies = DesktopIpc.makeIpcMethod({
     );
     return yield* browserImport.importCookies({
       input: importInput,
+      scope,
+      persistent,
+      ...(namespace === undefined ? {} : { namespace }),
+    });
+  }),
+});
+
+/**
+ * T3 Custom: one-click Midway refresh for the profile a preview tab is in.
+ * Registered next to the import methods, for the same reason.
+ */
+export const refreshMidwaySession = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_REFRESH_MIDWAY_CHANNEL,
+  payload: DesktopPreviewRefreshMidwayInputSchema,
+  result: MidwayRefreshResult,
+  handler: Effect.fn("desktop.ipc.preview.refreshMidwaySession")(function* ({
+    environmentId,
+    targetProfileId,
+  }) {
+    const midwayRefresh = yield* MidwayRefresh.MidwayRefresh;
+    const { scope, persistent, namespace } = resolvePartitionScope(environmentId, targetProfileId);
+    return yield* midwayRefresh.refresh({
       scope,
       persistent,
       ...(namespace === undefined ? {} : { namespace }),

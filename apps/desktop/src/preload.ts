@@ -285,6 +285,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
     importBrowserCookies: (input) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
+    refreshMidwaySession: (input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_REFRESH_MIDWAY_CHANNEL, input),
     clearCookies: (environmentId, profileId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL, { environmentId, profileId }),
     clearCache: (environmentId, profileId) =>

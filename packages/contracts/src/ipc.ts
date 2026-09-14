@@ -94,6 +94,7 @@ import type {
   BrowserImportResult,
   BrowserImportSource,
   BrowserImportSourceId,
+  MidwayRefreshResult,
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
@@ -1391,6 +1392,14 @@ export interface DesktopPreviewBridge {
     readonly sourceProfileDirectory: string;
     readonly targetProfileId: string;
   }) => Promise<BrowserImportResult>;
+  /**
+   * T3 Custom: copy the live Midway SSO session (from Chrome, or the mwinit
+   * jar) into a profile without the full import flow.
+   */
+  refreshMidwaySession: (input: {
+    readonly environmentId: EnvironmentId;
+    readonly targetProfileId: string;
+  }) => Promise<MidwayRefreshResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   /**
    * Activate the in-page element picker for the given tab. Resolves with

@@ -215,21 +215,35 @@ vi.mock("./previewBridge", () => ({
   },
 }));
 
+type TrailingAction = {
+  props: {
+    onNativePictureInPicture?: () => void;
+    children?: ReadonlyArray<TrailingAction | null | undefined>;
+  };
+};
+
 vi.mock("./PreviewChromeRow", () => ({
   PreviewChromeRow: (props: {
     onSubmit: (url: string) => void;
     onPickElement?: () => void;
     onPictureInPicture?: () => void;
     pictureInPicture?: boolean;
-    trailingActions?: {
-      props: { onNativePictureInPicture?: () => void };
-    };
+    trailingActions?: TrailingAction;
   }) => {
     mocks.submittedUrl = props.onSubmit;
     mocks.toggleAnnotation = props.onPickElement ?? null;
     mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
+    // The trailing slot holds the more-menu, optionally wrapped in a fragment
+    // with other toolbar buttons (T3 Custom adds the Midway refresh button).
+    const trailing = props.trailingActions;
+    const trailingChildren: ReadonlyArray<TrailingAction | null | undefined> = trailing
+      ? Array.isArray(trailing.props.children)
+        ? trailing.props.children
+        : [trailing]
+      : [];
     mocks.toggleNativePictureInPicture =
-      props.trailingActions?.props.onNativePictureInPicture ?? null;
+      trailingChildren.find((child) => child?.props.onNativePictureInPicture)?.props
+        .onNativePictureInPicture ?? null;
     mocks.pictureInPicturePressed = props.pictureInPicture ?? false;
     return null;
   },

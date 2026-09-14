@@ -46,6 +46,7 @@ import { subscribePreviewAction } from "./previewActionBus";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
+import { PreviewMidwayButton } from "./PreviewMidwayButton";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
 import {
   commitBrowserViewportChange,
@@ -759,19 +760,25 @@ export function PreviewView({
         }
         trailingActions={
           previewBridge ? (
-            <PreviewMoreMenu
-              environmentId={threadRef.environmentId}
-              profileId={activeProfileId}
-              profileName={activeProfileName}
-              tabId={runtimeTabId}
-              hasWebContents={desktopOverlay?.hasWebContents ?? false}
-              zoomFactor={desktopOverlay?.zoomFactor ?? 1}
-              colorScheme={desktopOverlay?.colorScheme ?? "system"}
-              deviceToolbarVisible={viewport._tag !== "fill"}
-              onToggleDeviceToolbar={handleToggleDeviceToolbar}
-              nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
-              onNativePictureInPicture={handleNativePictureInPicture}
-            />
+            <>
+              <PreviewMidwayButton
+                environmentId={threadRef.environmentId}
+                profileId={activeProfileId}
+              />
+              <PreviewMoreMenu
+                environmentId={threadRef.environmentId}
+                profileId={activeProfileId}
+                profileName={activeProfileName}
+                tabId={runtimeTabId}
+                hasWebContents={desktopOverlay?.hasWebContents ?? false}
+                zoomFactor={desktopOverlay?.zoomFactor ?? 1}
+                colorScheme={desktopOverlay?.colorScheme ?? "system"}
+                deviceToolbarVisible={viewport._tag !== "fill"}
+                onToggleDeviceToolbar={handleToggleDeviceToolbar}
+                nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
+                onNativePictureInPicture={handleNativePictureInPicture}
+              />
+            </>
           ) : null
         }
       />

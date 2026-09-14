@@ -84,6 +84,7 @@ export const PREVIEW_CLEAR_CACHE_CHANNEL = "desktop:preview-clear-cache";
 export const PREVIEW_GET_CONFIG_CHANNEL = "desktop:preview-get-config";
 export const PREVIEW_IMPORT_SOURCES_CHANNEL = "desktop:preview-import-sources";
 export const PREVIEW_IMPORT_COOKIES_CHANNEL = "desktop:preview-import-cookies";
+export const PREVIEW_REFRESH_MIDWAY_CHANNEL = "desktop:preview-refresh-midway";
 export const PREVIEW_SET_ANNOTATION_THEME_CHANNEL = "desktop:preview-set-annotation-theme";
 export const PREVIEW_PICK_ELEMENT_CHANNEL = "desktop:preview-pick-element";
 export const PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL = "desktop:preview-cancel-pick-element";
