@@ -35,7 +35,7 @@ const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 
-export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexCreateFailed>()(
+export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedError<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
   {
     cwd: Schema.String,
@@ -48,7 +48,7 @@ export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedErrorClass<WorkspaceSearchIndexScanTimedOut>()(
+export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedError<WorkspaceSearchIndexScanTimedOut>()(
   "WorkspaceSearchIndexScanTimedOut",
   {
     cwd: Schema.String,
@@ -60,7 +60,7 @@ export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexSearchFailed>()(
+export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedError<WorkspaceSearchIndexSearchFailed>()(
   "WorkspaceSearchIndexSearchFailed",
   {
     cwd: Schema.String,
@@ -75,7 +75,7 @@ export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexRefreshFailed>()(
+export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedError<WorkspaceSearchIndexRefreshFailed>()(
   "WorkspaceSearchIndexRefreshFailed",
   {
     cwd: Schema.String,
@@ -88,7 +88,7 @@ export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedErrorClass<W
   }
 }
 
-export class WorkspaceSearchIndexDestroyFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexDestroyFailed>()(
+export class WorkspaceSearchIndexDestroyFailed extends Schema.TaggedError<WorkspaceSearchIndexDestroyFailed>()(
   "WorkspaceSearchIndexDestroyFailed",
   {
     cwd: Schema.String,
@@ -562,6 +562,8 @@ function parseWorkspaceSearchIndexKey(key: string): {
  * workspace root and variant. WorkspaceSearchIndexMap owns memoization and
  * idle cleanup; using a default cwd here would mix resources from different
  * workspaces.
+ *
+ * @public Service construction is part of the canonical Effect module API.
  */
 export const layer = (key: string) => {
   const { cwd, variant } = parseWorkspaceSearchIndexKey(key);

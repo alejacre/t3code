@@ -30,6 +30,8 @@ dist-electron/
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
+apps/mobile/.generated/
+/.generated/
 artifacts/app-store/screenshots/
 .github/pr-assets/
 native/**/target/
@@ -41,3 +43,5 @@ node_modules/
 
 # Kiro CLI local state
 .kiro/
+# pnpm content-addressable store; never belongs in the repo.
+.pnpm-store/

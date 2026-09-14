@@ -25,7 +25,7 @@ import { cookieScope, type ImportedCookie } from "./CookieDatabase.ts";
 export const MIDWAY_AUTH_HOST = "midway-auth.amazon.com";
 export const MIDWAY_SESSION_COOKIE = "session";
 
-export class MidwayCookieReadError extends Schema.TaggedErrorClass<MidwayCookieReadError>()(
+export class MidwayCookieReadError extends Schema.TaggedError<MidwayCookieReadError>()(
   "MidwayCookieReadError",
   {
     cookieJarPath: Schema.String,

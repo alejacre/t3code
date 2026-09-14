@@ -40,7 +40,7 @@ import {
   type BrowserImportSourceDefinition,
 } from "./Sources.ts";
 
-export class BrowserImportFailedError extends Schema.TaggedErrorClass<BrowserImportFailedError>()(
+export class BrowserImportFailedError extends Schema.TaggedError<BrowserImportFailedError>()(
   "BrowserImportFailedError",
   {
     sourceId: Schema.String,
@@ -56,7 +56,7 @@ export class BrowserImportFailedError extends Schema.TaggedErrorClass<BrowserImp
   }
 }
 
-export class BrowserCookieWriteError extends Schema.TaggedErrorClass<BrowserCookieWriteError>()(
+export class BrowserCookieWriteError extends Schema.TaggedError<BrowserCookieWriteError>()(
   "BrowserCookieWriteError",
   {
     url: Schema.String,
@@ -180,6 +180,7 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
   return { imported, skipped, skippedDomains: [...skippedDomains].slice(0, 20) };
 });
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserImportMake() {
   const browserSession = yield* BrowserSession.BrowserSession;
   const platform = yield* HostProcessPlatform;
