@@ -146,6 +146,21 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("uses T3CODE_DESKTOP_USER_DATA_DIR verbatim, even when a legacy path exists", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        const userDataPath = yield* identity.resolveUserDataPath;
+
+        assert.equal(userDataPath, "/Users/alice/.t3-beta/electron");
+      }),
+      {
+        legacyPathExists: true,
+        environment: { env: { T3CODE_DESKTOP_USER_DATA_DIR: "/Users/alice/.t3-beta/electron" } },
+      },
+    ),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {

@@ -79,6 +79,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly appImagePath: Option.Option<string>;
     readonly userDataDirName: string;
     readonly legacyUserDataDirName: string;
+    /** Absolute userData path that bypasses the appData-derived default. */
+    readonly userDataDirOverride: Option.Option<string>;
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
@@ -233,6 +235,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appImagePath: config.appImagePath,
     userDataDirName,
     legacyUserDataDirName,
+    userDataDirOverride: config.userDataDirOverride,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({
       platform: input.platform,

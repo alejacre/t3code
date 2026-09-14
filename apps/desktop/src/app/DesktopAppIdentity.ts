@@ -48,6 +48,11 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
 export const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
+  // An explicit override wins outright; the legacy-directory detection below
+  // exists for upgraded installs, which an override is not.
+  if (Option.isSome(environment.userDataDirOverride)) {
+    return environment.path.resolve(environment.userDataDirOverride.value);
+  }
   const legacyPath = environment.path.join(
     environment.appDataDirectory,
     environment.legacyUserDataDirName,
