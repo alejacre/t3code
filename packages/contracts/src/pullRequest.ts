@@ -3,6 +3,7 @@ import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondab
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -11,6 +12,17 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
+
+/** Display/association metadata, never a credential or a filesystem capability. */
+export const AmazonReviewProject = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+  // Display/continuation context only; the reader must not use it as a local cwd.
+  workspaceRoot: Schema.optional(Schema.String),
+  repository: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/)),
+});
+export type AmazonReviewProject = typeof AmazonReviewProject.Type;
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
 export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
@@ -535,6 +547,8 @@ export const PullRequestListCursors = Schema.Record(
 export type PullRequestListCursors = typeof PullRequestListCursors.Type;
 
 export const PullRequestListInput = Schema.Struct({
+  /** Explicit beta-only local CRUX reader scope, independent of checkout ownership. */
+  amazonProjects: Schema.optional(Schema.Array(AmazonReviewProject).check(Schema.isMaxLength(500))),
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
   filters: Schema.optional(PullRequestListFilters),
@@ -641,6 +655,7 @@ export type PullRequestListResult = typeof PullRequestListResult.Type;
  * own host", which is every reference from before thread links became host-level.
  */
 export const PullRequestRef = Schema.Struct({
+  amazonProject: Schema.optional(AmazonReviewProject),
   projectId: ProjectId,
   host: Schema.optional(TrimmedNonEmptyString),
   /** Refuse a routed operation unless this GitHub account still owns the active credential. */
@@ -917,6 +932,20 @@ export const PullRequestOmittedFileStat = Schema.Struct({
 });
 export type PullRequestOmittedFileStat = typeof PullRequestOmittedFileStat.Type;
 
+/**
+ * One CRUX file comparison. Blob ids let the client load the exact old and new versions only
+ * when the file opens, which avoids flattening a multi-package review into one lossy patch.
+ */
+export const PullRequestDiffFile = Schema.Struct({
+  packageName: TrimmedNonEmptyString,
+  sourcePath: TrimmedNonEmptyString,
+  destinationPath: TrimmedNonEmptyString,
+  sourceBlobId: Schema.String,
+  destinationBlobId: Schema.String,
+  status: TrimmedNonEmptyString,
+});
+export type PullRequestDiffFile = typeof PullRequestDiffFile.Type;
+
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
   /**
@@ -931,6 +960,11 @@ export const PullRequestDiffResult = Schema.Struct({
    * show still reports what changed instead of a zero the diff never had.
    */
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
+  /**
+   * Exact per-file identities from a host that exposes blob-backed diffs. When present, the
+   * client renders file rows from these records and loads both blobs only after expansion.
+   */
+  files: Schema.optional(Schema.Array(PullRequestDiffFile)),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
@@ -942,6 +976,11 @@ export const PullRequestDiffFileContentsInput = Schema.Struct({
   changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
   oldPath: TrimmedNonEmptyString,
   newPath: TrimmedNonEmptyString,
+  /** CRUX package identity, needed because blob ids are scoped to one GitFarm repository. */
+  packageName: Schema.optional(TrimmedNonEmptyString),
+  /** Exact GitFarm objects returned by rawDiff. Empty means that side does not exist. */
+  sourceBlobId: Schema.optional(Schema.String),
+  destinationBlobId: Schema.optional(Schema.String),
 });
 export type PullRequestDiffFileContentsInput = typeof PullRequestDiffFileContentsInput.Type;
 
@@ -1183,6 +1222,12 @@ const PROVIDER_REQUIREMENT: Partial<
       "Bitbucket needs API credentials on the server. Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
     unauthenticated:
       "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
+  },
+  crux: {
+    missing:
+      "CRUX requires MyCli and the CRUX CLI on the server. Run the Amazon setup command to install MyCli, then reload.",
+    unauthenticated:
+      "CRUX could not use the current Midway session. Run `mwinit` on the server and retry.",
   },
 };
 

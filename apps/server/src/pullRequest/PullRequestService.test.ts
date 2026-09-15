@@ -16,7 +16,8 @@ import type {
   PullRequestReviewerCapabilities,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { PullRequestOperationError } from "@t3tools/contracts";
+import { EnvironmentId, PullRequestOperationError } from "@t3tools/contracts";
+import { readOnlyCrux } from "./CruxBetaProvider.ts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -211,6 +212,97 @@ function makeService(input: {
     ),
   );
 }
+
+it.effect(
+  "reads remote CRUX project metadata through local auth without a duplicate checkout",
+  () => {
+    const previous = process.env.T3CODE_AMAZON_BETA;
+    return Effect.gen(function* () {
+      process.env.T3CODE_AMAZON_BETA = "1";
+      let enabled = true;
+      let externalWrites = 0;
+      const roots: string[] = [];
+      const provider = readOnlyCrux(
+        fakeProvider("crux", {
+          getViewer: () => Effect.succeed("local-reader"),
+          listChangeRequests: (input) => {
+            roots.push(input.cwd);
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            });
+          },
+          getChangeRequest: (input) => {
+            roots.push(input.cwd);
+            return Effect.succeed(hostedChangeRequest("Read through local auth"));
+          },
+          comment: () =>
+            Effect.sync(() => {
+              externalWrites++;
+            }),
+        }),
+        Effect.suspend(() =>
+          enabled
+            ? Effect.void
+            : Effect.fail(
+                new PullRequestProviderError({
+                  provider: "crux",
+                  operation: "betaRead",
+                  reason: "failed",
+                  detail: "Amazon beta disabled",
+                }),
+              ),
+        ),
+      );
+      const service = yield* makeService({ projects: [], providers: [provider] });
+      const amazonProject = {
+        environmentId: EnvironmentId.make("cloud-desktop"),
+        projectId: "remote-p1" as ProjectId,
+        title: "Remote package",
+        repository: "ExamplePackage",
+        workspaceRoot: "/remote/working/repo",
+      };
+      const page = yield* service.list({ state: "open", amazonProjects: [amazonProject] });
+      assert.strictEqual(page.entries.length, 1);
+      assert.strictEqual(page.entries[0]?.projectId, amazonProject.projectId);
+      assert.strictEqual(page.viewers["code.amazon.com"], "local-reader");
+      const reference = {
+        projectId: amazonProject.projectId,
+        repository: amazonProject.repository,
+        host: "code.amazon.com",
+        number: 1,
+        amazonProject,
+      };
+      const detail = yield* service.detail(reference);
+      assert.strictEqual(detail.workspaceRoot, amazonProject.workspaceRoot);
+      assert.strictEqual(detail.viewer, "local-reader");
+      assert.strictEqual(detail.viewerPermissions.comment, false);
+      assert.deepStrictEqual(detail.capabilities.actions, []);
+      assert.ok(roots.every((cwd) => cwd === process.cwd()));
+      assert.ok(roots.length >= 2);
+      assert.strictEqual(
+        (yield* Effect.exit(service.detail({ ...reference, repository: "OtherPackage" })))._tag,
+        "Failure",
+      );
+      assert.strictEqual(
+        (yield* Effect.exit(service.comment({ ...reference, body: "must not publish" })))._tag,
+        "Failure",
+      );
+      assert.strictEqual(externalWrites, 0);
+      enabled = false;
+      // The metadata path must not serve a last-good checkout cache after opt-out.
+      assert.strictEqual((yield* Effect.exit(service.detail(reference)))._tag, "Failure");
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.T3CODE_AMAZON_BETA;
+          else process.env.T3CODE_AMAZON_BETA = previous;
+        }),
+      ),
+    );
+  },
+);
 
 it.effect("refines unknown self-hosted GitLab projects before listing merge requests", () =>
   Effect.gen(function* () {

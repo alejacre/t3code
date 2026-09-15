@@ -23,11 +23,14 @@ import {
   type MergedPullRequestList,
 } from "../components/pullRequest/pullRequestList.logic";
 import { formatEnvironmentQueryError } from "./query";
+import { withAmazonReviewReader, withAmazonReviewQuery } from "./amazonReviews";
+import { environmentServerConfigsAtom } from "./server";
 
-export const pullRequestEnvironment = createPullRequestEnvironmentAtoms(connectionAtomRuntime);
-export const linkedPullRequestDetailAtom = createLinkedPullRequestSummaryAtomFamily(
-  connectionAtomRuntime,
-  pullRequestEnvironment.refreshes,
+export const pullRequestEnvironment = withAmazonReviewReader(
+  createPullRequestEnvironmentAtoms(connectionAtomRuntime),
+);
+export const linkedPullRequestDetailAtom = withAmazonReviewQuery(
+  createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime, pullRequestEnvironment.refreshes),
 );
 
 const observedPullRequestSummaryAtom = Atom.family((key: string) =>
@@ -74,9 +77,8 @@ export function useSharedPullRequestSummary(
   }, [atom, current, environmentId]);
   return newestPullRequestSummary(current, observed);
 }
-export const pullRequestStackAtom = createPullRequestStackAtomFamily(
-  connectionAtomRuntime,
-  pullRequestEnvironment.refreshes,
+export const pullRequestStackAtom = withAmazonReviewQuery(
+  createPullRequestStackAtomFamily(connectionAtomRuntime, pullRequestEnvironment.refreshes),
 );
 
 export interface EnvironmentQueryTarget<Input> {
@@ -165,13 +167,26 @@ const usePullRequestTurnRefreshQuery = createMergedEnvironmentQuery(
 export function usePullRequestTurnRefreshes(
   environmentIds: ReadonlyArray<EnvironmentId>,
 ): ReadonlyArray<readonly [EnvironmentId, number]> {
+  const configs = useAtomValue(environmentServerConfigsAtom);
   return usePullRequestTurnRefreshQuery(
-    environmentIds.map((environmentId) => ({ environmentId, input: {} })),
+    environmentIds
+      .filter(
+        (environmentId) =>
+          configs.get(environmentId)?.environment.capabilities.pullRequests === true,
+      )
+      .map((environmentId) => ({ environmentId, input: {} })),
   ).values;
 }
 
+const noReviewRefreshes = Atom.make(AsyncResult.success(0));
+
 export function usePullRequestTurnRefresh(environmentId: EnvironmentId): number | null {
-  const result = useAtomValue(pullRequestEnvironment.refreshes({ environmentId, input: {} }));
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const result = useAtomValue(
+    configs.get(environmentId)?.environment.capabilities.pullRequests === true
+      ? pullRequestEnvironment.refreshes({ environmentId, input: {} })
+      : noReviewRefreshes,
+  );
   return Option.getOrNull(AsyncResult.value(result));
 }
 

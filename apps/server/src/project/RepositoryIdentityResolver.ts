@@ -28,6 +28,13 @@ export interface RepositoryIdentityResolverOptions {
 export class RepositoryIdentityResolver extends Context.Service<
   RepositoryIdentityResolver,
   {
+    /**
+     * Resolves a path inside a Git repository to its canonical top-level path.
+     *
+     * This does not require a remote, which lets thread repository discovery
+     * include new or local-only repositories.
+     */
+    readonly resolveRoot: (cwd: string) => Effect.Effect<string | null>;
     readonly resolve: (
       cwd: string,
       options?: { readonly refresh?: boolean },
@@ -66,6 +73,26 @@ function pickPrimaryRemote(
   return remoteName && remoteUrl ? { remoteName, remoteUrl } : null;
 }
 
+function casePreservingRepositoryPath(remoteUrl: string): string | null {
+  const trimmed = remoteUrl
+    .trim()
+    .replace(/\/+$/gu, "")
+    .replace(/\.git$/iu, "");
+  if (/^(?:ssh|https?|git):\/\//iu.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      const path = url.pathname
+        .split("/")
+        .filter((segment) => segment.length > 0)
+        .join("/");
+      return path.includes("/") ? path : null;
+    } catch {
+      return null;
+    }
+  }
+  return /^[a-zA-Z0-9._-]+@[^:/\s]+:([^/\s]+(?:\/[^/\s]+)+)$/u.exec(trimmed)?.[1] ?? null;
+}
+
 function buildRepositoryIdentity(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
@@ -73,7 +100,11 @@ function buildRepositoryIdentity(input: {
 }): RepositoryIdentity {
   const canonicalKey = normalizeGitRemoteUrl(input.remoteUrl);
   const sourceControlProvider = detectSourceControlProviderFromGitRemoteUrl(input.remoteUrl);
-  const repositoryPath = canonicalKey.split("/").slice(1).join("/");
+  const normalizedRepositoryPath = canonicalKey.split("/").slice(1).join("/");
+  const repositoryPath =
+    sourceControlProvider?.kind === "crux"
+      ? (casePreservingRepositoryPath(input.remoteUrl) ?? normalizedRepositoryPath)
+      : normalizedRepositoryPath;
   const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
   const [owner] = repositoryPathSegments;
   const repositoryName = repositoryPathSegments.at(-1);
@@ -189,7 +220,11 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
     return yield* Cache.get(repositoryIdentityCache, cacheKey);
   });
 
-  return RepositoryIdentityResolver.of({ resolve });
+  const resolveRoot: RepositoryIdentityResolver["Service"]["resolveRoot"] = Effect.fn(
+    "RepositoryIdentityResolver.resolveRoot",
+  )((cwd) => Cache.get(repositoryRootCache, cwd));
+
+  return RepositoryIdentityResolver.of({ resolveRoot, resolve });
 });
 
 export const layer = Layer.effect(RepositoryIdentityResolver, make()).pipe(

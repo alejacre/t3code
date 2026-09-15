@@ -133,6 +133,8 @@ export interface GrokAdapterLiveOptions {
   readonly makeRuntime?: typeof makeGrokAcpRuntime;
   readonly resolveModelId?: typeof resolveGrokAcpBaseModelId;
   readonly enableGrokExtensions?: boolean;
+  /** Agents without native steering must finish each prompt before the next. */
+  readonly followUpBehavior?: "cancel-and-reprompt" | "queue";
   readonly autoApproveEditPermissions?: boolean;
   /**
    * Model option id whose value selects the ACP session mode. Kiro exposes its
@@ -218,8 +220,8 @@ interface GrokSessionContext {
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
   interruptedTurnIds: Set<TurnId>;
   /** Number of sendTurn prompts currently in flight or being prepared.
-   * >0 means a turn is actively running, so a new sendTurn is a steer that
-   * cancels the in-flight prompt and continues the same turn. Only the last
+   * >0 means a turn is actively running, so a new sendTurn continues the same
+   * turn, either queued or cancel-and-reprompt. Only the last
    * remaining prompt settles the turn. */
   promptsInFlight: number;
   /** Monotonic id assigned to each sendTurn. Steers discard older epochs. */
@@ -485,6 +487,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         : getModelSelectionStringOptionValue(modelSelection, sessionModeOptionId)?.trim() ||
           undefined;
     const enableGrokExtensions = options?.enableGrokExtensions ?? provider === GROK_PROVIDER;
+    const queueFollowUps = options?.followUpBehavior === "queue";
     const autoApproveEditPermissions = options?.autoApproveEditPermissions ?? false;
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make(provider);
     const fileSystem = yield* FileSystem.FileSystem;
@@ -1680,10 +1683,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           input.threadId,
           Effect.gen(function* () {
             const ctx = yield* requireSession(input.threadId);
-            // A sendTurn while a prompt is in flight is a steer: reuse the
-            // active turn and cancel the in-flight ACP prompt so Grok takes
-            // the new instruction immediately, matching Claude/Codex, instead
-            // of waiting behind serialized session/prompt.
+            // Follow-ups share the active turn. Only providers explicitly
+            // using cancel-and-reprompt may discard the previous prompt.
             const steeringTurnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
             const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
             // Count this prompt immediately so a superseded in-flight prompt
@@ -1776,26 +1777,34 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 });
               }
 
-              const currentModelId = yield* applyGrokAcpModelSelection({
-                runtime: ctx.acp,
-                currentModelId: ctx.currentModelId,
-                currentReasoningEffort: ctx.currentReasoningEffort,
-                requestedModelId: requestedTurnModelId,
-                requestedReasoningEffort: requestedTurnReasoningEffort,
-                mapError: (cause) =>
-                  mapAcpToAdapterError(provider, input.threadId, "session/set_model", cause),
-              });
-              ctx.currentModelId = currentModelId;
-              yield* applyAcpSessionMode(ctx.acp, requestedSessionMode(turnModelSelection)).pipe(
-                Effect.mapError((cause) =>
-                  mapAcpToAdapterError(provider, input.threadId, "session/set_mode", cause),
-                ),
-              );
-              if (requestedTurnReasoningEffort !== undefined) {
-                ctx.currentReasoningEffort = normalizeGrokReasoningEffort(
-                  requestedTurnReasoningEffort,
+              const configureModel = Effect.gen(function* () {
+                const currentModelId = yield* applyGrokAcpModelSelection({
+                  runtime: ctx.acp,
+                  currentModelId: ctx.currentModelId,
+                  currentReasoningEffort: ctx.currentReasoningEffort,
+                  requestedModelId: requestedTurnModelId,
+                  requestedReasoningEffort: requestedTurnReasoningEffort,
+                  mapError: (cause) =>
+                    mapAcpToAdapterError(provider, input.threadId, "session/set_model", cause),
+                });
+                ctx.currentModelId = currentModelId;
+                yield* applyAcpSessionMode(ctx.acp, requestedSessionMode(turnModelSelection)).pipe(
+                  Effect.mapError((cause) =>
+                    mapAcpToAdapterError(provider, input.threadId, "session/set_mode", cause),
+                  ),
                 );
-              }
+                if (requestedTurnReasoningEffort !== undefined) {
+                  ctx.currentReasoningEffort = normalizeGrokReasoningEffort(
+                    requestedTurnReasoningEffort,
+                  );
+                }
+                return currentModelId;
+              });
+              // A queued message must not change the live prompt's model or
+              // agent. Apply its selection only when it reaches dispatch.
+              const currentModelId = queueFollowUps
+                ? (requestedTurnModelId ?? ctx.currentModelId)
+                : yield* configureModel;
               const displayModel = currentModelId ? resolveModelId(currentModelId) : undefined;
               const runtimeInstructions = buildRuntimeInstructions({
                 harness: providerLabel,
@@ -1842,7 +1851,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   turnId,
                   payload: displayModel ? { model: displayModel } : {},
                 });
-              } else {
+              } else if (!queueFollowUps) {
                 // Discard the previous epoch only after this replacement is
                 // ready. A failed steer must not skip the live prompt, which
                 // settles without a terminal event when emitTurnCompletion is
@@ -1850,6 +1859,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
                 yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
                 ctx.discardBeforeEpoch = promptEpoch;
+              } else {
+                yield* offerRuntimeEvent({
+                  type: "runtime.warning",
+                  ...(yield* makeEventStamp()),
+                  provider,
+                  threadId: input.threadId,
+                  turnId,
+                  payload: {
+                    message: `${providerLabel} does not support live steering. Message queued until the current response finishes.`,
+                  },
+                });
               }
 
               return {
@@ -1862,6 +1882,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 promptEpoch,
                 promptLifecycle: ctx.promptLifecycle,
                 steeringTurnId,
+                configureModel,
               };
             }).pipe(
               Effect.tapCause(() =>
@@ -1900,7 +1921,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               ) {
                 return { _tag: "Skipped" as const, interrupted };
               }
-              if (prepared.steeringTurnId !== undefined) {
+              if (prepared.steeringTurnId !== undefined && !queueFollowUps) {
                 yield* Effect.ignore(
                   liveCtx.acp.cancel.pipe(
                     Effect.mapError((error) =>
@@ -1911,6 +1932,28 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               }
               if (liveCtx.interruptedTurnIds.has(prepared.turnId)) {
                 return { _tag: "Skipped" as const, interrupted: true };
+              }
+              if (queueFollowUps) {
+                const currentModelId = yield* prepared.configureModel.pipe(
+                  Effect.tapError((error) =>
+                    Ref.set(
+                      promptFailureMessageRef,
+                      formatPromptFailureMessage(providerLabel, error),
+                    ),
+                  ),
+                );
+                if (liveCtx.stopped || liveCtx.interruptedTurnIds.has(prepared.turnId)) {
+                  return { _tag: "Skipped" as const, interrupted: true };
+                }
+                // Earlier queued prompts may have changed the model since
+                // preparation. Describe the model that will actually run.
+                prepared.displayModel = currentModelId ? resolveModelId(currentModelId) : undefined;
+                prepared.runtimeInstructions = buildRuntimeInstructions({
+                  harness: providerLabel,
+                  model: prepared.displayModel,
+                  reasoningEffort: liveCtx.currentReasoningEffort,
+                });
+                yield* refreshSessionTurnLiveness(input.threadId, prepared.turnId);
               }
               const dispatched = yield* Deferred.make<void>();
               liveCtx.dispatchedPromptTurnIds.push(prepared.turnId);
@@ -1932,6 +1975,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 Deferred.await(dispatched),
                 Fiber.await(fiber).pipe(Effect.asVoid),
               );
+              if (queueFollowUps) {
+                // Keep queued prompts outside the runtime until this RPC and
+                // its notifications finish. Stop can then skip all waiting
+                // messages without dispatching another prompt after cancel.
+                yield* Fiber.await(fiber);
+                yield* prepared.acp.drainEvents;
+              }
               return { _tag: "Started" as const, fiber };
             }),
           );
@@ -1962,6 +2012,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           }
 
           const result = yield* Fiber.join(promptStart.fiber).pipe(
+            Effect.flatMap((result) =>
+              queueFollowUps &&
+              result.stopReason === "cancelled" &&
+              !sessions.get(input.threadId)?.interruptedTurnIds.has(prepared.turnId)
+                ? Effect.fail(
+                    EffectAcpErrors.AcpRequestError.internalError(
+                      `${providerLabel} cancelled the response without a Stop request. Send the message again to retry.`,
+                    ),
+                  )
+                : Effect.succeed(result),
+            ),
             Effect.tap((promptResult) =>
               Effect.all(
                 [

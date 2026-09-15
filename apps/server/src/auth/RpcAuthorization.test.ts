@@ -64,7 +64,13 @@ describe("RPC authorization scopes", () => {
   });
 
   it("rejects unknown RPC method names", () => {
-    for (const method of ["server.notRegistered", "toString", "constructor"]) {
+    for (const method of [
+      "server.notRegistered",
+      "toString",
+      "constructor",
+      "taskei.query",
+      "taskei.link",
+    ]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(
         `RPC method ${method} has no declared authorization scope.`,
       );

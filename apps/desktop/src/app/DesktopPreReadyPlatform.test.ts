@@ -103,7 +103,7 @@ describe("DesktopPreReadyPlatform", () => {
             const identity = yield* Effect.promise(() => portalIdentity);
             assert.equal(identity.desktopName, "com.t3tools.T3Code.desktop");
             assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
-            assert.include(identity.desktopEntry ?? "", "Name=T3 Code (Alpha)");
+            assert.include(identity.desktopEntry ?? "", "Name=T3 Custom");
             assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
           }),
         ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
@@ -121,6 +121,60 @@ describe("DesktopPreReadyPlatform", () => {
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.asVoid,
     );
+  });
+
+  it("maps managed Chrome authentication policies to Chromium switches", () => {
+    const values = new Map([
+      ["AuthServerAllowlist", "*.amazon.com,amazon.com"],
+      ["AuthNegotiateDelegateAllowlist", "*.amazon.com"],
+    ]);
+
+    DesktopPreReadyPlatform.configureAmazonChromiumAuthentication({
+      commandLine: {
+        appendSwitch: appendSwitchMock,
+        getSwitchValue: () => "",
+        hasSwitch: () => false,
+      },
+      amazonEnabled: true,
+      platform: "darwin",
+      readManagedPolicy: (policyName) => values.get(policyName) ?? null,
+    });
+
+    assert.deepEqual(appendSwitchMock.mock.calls, [
+      ["auth-server-whitelist", "*.amazon.com,amazon.com"],
+      ["auth-negotiate-delegate-whitelist", "*.amazon.com"],
+    ]);
+  });
+
+  it("does not override explicit auth switches or configure standard builds", () => {
+    DesktopPreReadyPlatform.configureAmazonChromiumAuthentication({
+      commandLine: {
+        appendSwitch: appendSwitchMock,
+        getSwitchValue: () => "explicit",
+        hasSwitch: (switchName) => switchName === "auth-server-whitelist",
+      },
+      amazonEnabled: true,
+      platform: "darwin",
+      readManagedPolicy: () => "*.amazon.com",
+    });
+    assert.deepEqual(appendSwitchMock.mock.calls, [
+      ["auth-negotiate-delegate-whitelist", "*.amazon.com"],
+    ]);
+
+    appendSwitchMock.mockClear();
+    DesktopPreReadyPlatform.configureAmazonChromiumAuthentication({
+      commandLine: {
+        appendSwitch: appendSwitchMock,
+        getSwitchValue: () => "",
+        hasSwitch: () => false,
+      },
+      amazonEnabled: false,
+      platform: "darwin",
+      readManagedPolicy: () => {
+        throw new Error("Managed policy should not be read.");
+      },
+    });
+    assert.equal(appendSwitchMock.mock.calls.length, 0);
   });
 
   it.effect(

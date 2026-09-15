@@ -138,7 +138,8 @@ import {
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { amazonReviewProject } from "../components/pullRequest/amazonReviewRouting";
 import {
   pullRequestEnvironment,
   usePullRequestList,
@@ -300,6 +301,14 @@ function PullRequestsRouteView() {
   const navigate = useNavigate({ from: Route.fullPath });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { environments } = useEnvironments();
+  const allProjects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const readerConfig = environments.find(
+    (environment) => environment.environmentId === primaryEnvironmentId,
+  )?.serverConfig;
+  const amazonReaderEnabled =
+    readerConfig?.settings.amazonBetaEnabled === true &&
+    readerConfig.environment.capabilities.amazonReadConnector === true;
   // Every connected environment that has said it can list pull requests. Sorted, so the query
   // keys, the scope key and the stored snapshot all read the same whichever order the
   // connections happened to come up in.
@@ -307,10 +316,17 @@ function PullRequestsRouteView() {
     () =>
       environments
         .filter(
-          (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+          (environment) =>
+            environment.serverConfig?.environment.capabilities.pullRequests === true ||
+            (amazonReaderEnabled &&
+              allProjects.some(
+                (project) =>
+                  project.environmentId === environment.environmentId &&
+                  amazonReviewProject(project) !== null,
+              )),
         )
         .toSorted((left, right) => left.environmentId.localeCompare(right.environmentId)),
-    [environments],
+    [environments, amazonReaderEnabled, allProjects],
   );
   // The server the URL asks for, kept only while it is one the page could read: a link naming a
   // server this workspace no longer has falls back to all of them rather than to nothing.
@@ -342,7 +358,6 @@ function PullRequestsRouteView() {
   // waits rather than telling a reader to upgrade a server that has not spoken.
   const capabilityKnown = environments.some((environment) => environment.serverConfig !== null);
   const pullRequestsSupported = environmentIds.length > 0;
-  const allProjects = useProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
   // the one wrong answer the empty state can give.
@@ -1610,16 +1625,16 @@ function PullRequestsRouteView() {
         <PullRequestListGhost rows={7} />
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
-          title="Pull requests unavailable"
-          error="Update your T3 Code servers to browse pull requests."
+          title="Code reviews unavailable"
+          error="Update your T3 Code servers to browse code reviews."
         />
       ) : firstLoad ? (
         <PullRequestListGhost rows={7} />
-      ) : listQuery.error && entries.length === 0 ? (
+      ) : (listQuery.error || listErrors.length > 0) && entries.length === 0 ? (
         <PullRequestsUnavailableState
-          error={listQuery.error}
+          error={listQuery.error ?? listErrors.map((error) => error.message).join(" ")}
           refreshing={listQuery.isPending}
-          onRetry={() => listQuery.refresh()}
+          onRetry={() => void refreshFromHost()}
         />
       ) : carriedToNothing ? (
         <PullRequestListGhost rows={7} />
@@ -1749,7 +1764,7 @@ function PullRequestsRouteView() {
   ];
   const sortMenu = (
     <CompactFilterMenu
-      label="Sort pull requests"
+      label="Sort code reviews"
       triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
       triggerLabel="Sort"
       outlined
@@ -2185,7 +2200,7 @@ function ExpandableSearch({
     <Button
       size="icon-sm"
       variant="ghost"
-      aria-label="Search pull requests"
+      aria-label="Search code reviews"
       onClick={() => onOpenChange(true)}
     >
       <SearchIcon className="size-4" />
@@ -2313,11 +2328,11 @@ function PullRequestsColumn({
       >
         {titlebarControls}
         {condensed ? (
-          <WorkspaceBreadcrumb ariaLabel="Pull request scope" className="overflow-hidden">
+          <WorkspaceBreadcrumb ariaLabel="Code review scope" className="overflow-hidden">
             {/* An expanded search owns the scarce horizontal space. The page title stays
                 available to readers while the live filters remain available in both states. */}
             <WorkspaceBreadcrumbItem current className={cn(searchExpanded && "sr-only")}>
-              <h1 className="truncate">Pull Requests</h1>
+              <h1 className="truncate">Code Reviews</h1>
             </WorkspaceBreadcrumbItem>
             {searchExpanded ? null : <WorkspaceBreadcrumbSeparator />}
             <WorkspaceBreadcrumbItem className="shrink gap-1.5">
@@ -2345,9 +2360,9 @@ function PullRequestsColumn({
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         ) : (
-          <WorkspaceBreadcrumb ariaLabel="Pull requests breadcrumb">
+          <WorkspaceBreadcrumb ariaLabel="Code reviews breadcrumb">
             <WorkspaceBreadcrumbItem current>
-              <h1 className="truncate">Pull Requests</h1>
+              <h1 className="truncate">Code Reviews</h1>
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         )}
@@ -2423,7 +2438,7 @@ function PullRequestRefreshControl({
     <Button
       size={compact ? "icon-sm" : "icon"}
       variant={compact ? "ghost" : "outline"}
-      aria-label="Refresh pull requests"
+      aria-label="Refresh code reviews"
       onClick={onRefresh}
       disabled={refreshing}
     >

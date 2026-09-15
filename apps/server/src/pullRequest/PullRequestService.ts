@@ -24,6 +24,7 @@ import {
   pullRequestProviderRequirement,
   resolvePullRequestAuthorFilter,
   type OrchestrationProjectShell,
+  type AmazonReviewProject,
   type PullRequestAction,
   type PullRequestActionInput,
   type PullRequestActivity,
@@ -564,6 +565,31 @@ export const make = Effect.gen(function* () {
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const readCache = yield* PullRequestReadCache.PullRequestReadCache;
 
+  // Metadata describes the caller's execution project, not a local checkout or permission.
+  // Only the read-only beta provider can serve it, using this process's local auth and cwd.
+  const amazonProject = (
+    metadata: AmazonReviewProject,
+  ): Effect.Effect<SupportedProject, PullRequestError> => {
+    const api = process.env.T3CODE_AMAZON_BETA === "1" ? registry.get("crux") : null;
+    if (api === null || api.capabilities.actions.length > 0 || api.capabilities.comment)
+      return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
+    return Effect.succeed({
+      cursorKey: listCursorKey("code.amazon.com", metadata.repository),
+      repository: metadata.repository,
+      host: "code.amazon.com",
+      api: withRateLimitBackoff(api, "code.amazon.com", rateLimits),
+      project: {
+        id: metadata.projectId,
+        title: metadata.title,
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "1970-01-01T00:00:00.000Z",
+        updatedAt: "1970-01-01T00:00:00.000Z",
+      },
+    });
+  };
+
   const refineUnknownProjectKinds = (
     projects: ReadonlyArray<OrchestrationProjectShell>,
     filter: Pick<PullRequestListInput, "projectId" | "host">,
@@ -642,90 +668,110 @@ export const make = Effect.gen(function* () {
   };
 
   const listWorkspaceProjects = (
-    filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
+    filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host" | "amazonProjects">,
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
-    (filter.projectId === undefined
-      ? projections.getProjectShells(filter.projectIds)
-      : projections.getProjectShellById(filter.projectId).pipe(Effect.map(Option.toArray))
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new PullRequestOperationError({
-            operation: "listProjects",
-            detail: "The project list could not be read.",
-            cause: error,
+    filter.amazonProjects !== undefined
+      ? Effect.forEach(
+          filter.amazonProjects.filter(
+            (project, index, all) =>
+              (filter.host === undefined || filter.host === "code.amazon.com") &&
+              (filter.projectId === undefined || filter.projectId === project.projectId) &&
+              (filter.projectIds === undefined || filter.projectIds.includes(project.projectId)) &&
+              all.findIndex((other) => other.repository === project.repository) === index,
+          ),
+          amazonProject,
+        ).pipe(
+          Effect.map((supported) => ({
+            supported,
+            unimplemented: new Map(),
+            viewerRoots: new Map([["code.amazon.com", [process.cwd()]]]),
+          })),
+        )
+      : (filter.projectId === undefined
+          ? projections.getProjectShells(filter.projectIds)
+          : projections.getProjectShellById(filter.projectId).pipe(Effect.map(Option.toArray))
+        ).pipe(
+          Effect.mapError(
+            (error) =>
+              new PullRequestOperationError({
+                operation: "listProjects",
+                detail: "The project list could not be read.",
+                cause: error,
+              }),
+          ),
+          Effect.flatMap((projects) =>
+            refineUnknownProjectKinds(projects, filter).pipe(
+              Effect.map((refinedProviders) => ({ refinedProviders, projects })),
+            ),
+          ),
+          Effect.map(({ refinedProviders, projects }) => {
+            const supported: SupportedProject[] = [];
+            const unimplemented = new Map<
+              string,
+              { kind: SourceControlProviderKind; projectCount: number }
+            >();
+            const viewerRoots = new Map<string, string[]>();
+            const seen = new Set<string>();
+            for (const project of projects) {
+              if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+              if (filter.projectIds !== undefined && !filter.projectIds.includes(project.id))
+                continue;
+              const identity = project.repositoryIdentity;
+              let kind = identity?.provider as SourceControlProviderKind | undefined;
+              const repository = sourceControlRepositorySelector(project.repositoryIdentity);
+              if (!identity || kind === undefined || repository === null) continue;
+              // Worktrees of one repository are separate projects; reading the remote once keeps
+              // the page from repeating every change request per local checkout. The host is part
+              // of the key, so the same `owner/repo` on two hosts stays two repositories.
+              let refinedProvider: SourceControlProviderInfo | null | undefined;
+              if (
+                kind === "unknown" ||
+                (kind === "forgejo" && isSshRemoteUrl(identity.locator.remoteUrl))
+              ) {
+                const provider = detectSourceControlProviderFromRemoteUrl(
+                  identity.locator.remoteUrl,
+                );
+                refinedProvider = provider === null ? null : refinedProviders.get(provider.baseUrl);
+                kind = refinedProvider?.kind ?? kind;
+              }
+              const host =
+                refinedProvider?.kind === "forgejo"
+                  ? new URL(refinedProvider.baseUrl).host.toLowerCase()
+                  : pullRequestHostOf(identity, kind);
+              if (filter.host !== undefined && host !== filter.host.toLowerCase()) {
+                continue;
+              }
+              const api = registry.get(kind);
+              // Recorded before the de-duplication below, so the viewer lookup keeps the alternates
+              // the listing is about to drop.
+              if (api !== null) {
+                const roots = viewerRoots.get(host);
+                if (roots === undefined) viewerRoots.set(host, [project.workspaceRoot]);
+                else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
+              }
+              const key = listCursorKey(
+                host,
+                kind === "azure-devops" ? identity.canonicalKey : repository,
+              );
+              if (seen.has(key)) continue;
+              seen.add(key);
+              if (api === null) {
+                const counted = unimplemented.get(host);
+                if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
+                else counted.projectCount += 1;
+                continue;
+              }
+              supported.push({
+                cursorKey: key,
+                project,
+                api: withRateLimitBackoff(api, host, rateLimits),
+                repository,
+                host,
+              });
+            }
+            return { supported, unimplemented, viewerRoots };
           }),
-      ),
-      Effect.flatMap((projects) =>
-        refineUnknownProjectKinds(projects, filter).pipe(
-          Effect.map((refinedProviders) => ({ refinedProviders, projects })),
-        ),
-      ),
-      Effect.map(({ refinedProviders, projects }) => {
-        const supported: SupportedProject[] = [];
-        const unimplemented = new Map<
-          string,
-          { kind: SourceControlProviderKind; projectCount: number }
-        >();
-        const viewerRoots = new Map<string, string[]>();
-        const seen = new Set<string>();
-        for (const project of projects) {
-          if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-          if (filter.projectIds !== undefined && !filter.projectIds.includes(project.id)) continue;
-          const identity = project.repositoryIdentity;
-          let kind = identity?.provider as SourceControlProviderKind | undefined;
-          const repository = sourceControlRepositorySelector(project.repositoryIdentity);
-          if (!identity || kind === undefined || repository === null) continue;
-          // Worktrees of one repository are separate projects; reading the remote once keeps
-          // the page from repeating every change request per local checkout. The host is part
-          // of the key, so the same `owner/repo` on two hosts stays two repositories.
-          let refinedProvider: SourceControlProviderInfo | null | undefined;
-          if (
-            kind === "unknown" ||
-            (kind === "forgejo" && isSshRemoteUrl(identity.locator.remoteUrl))
-          ) {
-            const provider = detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl);
-            refinedProvider = provider === null ? null : refinedProviders.get(provider.baseUrl);
-            kind = refinedProvider?.kind ?? kind;
-          }
-          const host =
-            refinedProvider?.kind === "forgejo"
-              ? new URL(refinedProvider.baseUrl).host.toLowerCase()
-              : pullRequestHostOf(identity, kind);
-          if (filter.host !== undefined && host !== filter.host.toLowerCase()) {
-            continue;
-          }
-          const api = registry.get(kind);
-          // Recorded before the de-duplication below, so the viewer lookup keeps the alternates
-          // the listing is about to drop.
-          if (api !== null) {
-            const roots = viewerRoots.get(host);
-            if (roots === undefined) viewerRoots.set(host, [project.workspaceRoot]);
-            else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
-          }
-          const key = listCursorKey(
-            host,
-            kind === "azure-devops" ? identity.canonicalKey : repository,
-          );
-          if (seen.has(key)) continue;
-          seen.add(key);
-          if (api === null) {
-            const counted = unimplemented.get(host);
-            if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
-            else counted.projectCount += 1;
-            continue;
-          }
-          supported.push({
-            cursorKey: key,
-            project,
-            api: withRateLimitBackoff(api, host, rateLimits),
-            repository,
-            host,
-          });
-        }
-        return { supported, unimplemented, viewerRoots };
-      }),
-    );
+        );
 
   /**
    * The project whose checkout and credentials serve a reference. The project's own
@@ -734,65 +780,80 @@ export const make = Effect.gen(function* () {
    * targeting can fall back to another checkout on the host. Azure derives its organization
    * from the checkout, so it requires a matching repository.
    */
-  const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
-    listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
-        const own = supported[0];
-        const repository = ref.repository.trim();
-        const host = ref.host?.trim().toLowerCase();
-        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
-          // Hostless references only ever meant the project's own repository, and a hosted one
-          // naming it still is; either way the project serves itself.
-          if (host === undefined || host === own.host) return Effect.succeed(own);
-        }
-        if (host === undefined) {
-          if (own === undefined) {
-            return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
-          }
-          // The repository travels through the client, so it is checked against the project's
-          // own remote rather than being handed to a provider verbatim.
-          return Effect.fail(
+  const requireProject = (
+    ref: PullRequestRef,
+  ): Effect.Effect<SupportedProject, PullRequestError> =>
+    ref.amazonProject !== undefined
+      ? ref.host === "code.amazon.com" &&
+        ref.projectId === ref.amazonProject.projectId &&
+        ref.repository === ref.amazonProject.repository
+        ? amazonProject(ref.amazonProject)
+        : Effect.fail(
             new PullRequestOperationError({
               operation: "resolveRepository",
-              detail: "The change request does not belong to the selected project.",
+              detail: "The Amazon review reference does not match its execution project.",
             }),
-          );
-        }
-        const repositoryKey = canonicalRepositoryKey(`${host}/${repository}`.toLowerCase());
-        // Azure SSH and legacy clone hosts differ from the browser URL's host. Compare
-        // the complete repository identity before narrowing those checkouts by host.
-        return listWorkspaceProjects(
-          repositoryKey.startsWith("dev.azure.com/") ? {} : { host },
-        ).pipe(
-          Effect.flatMap(({ supported }) => {
-            const onHost = supported.filter((candidate) => candidate.host === host);
-            const route =
-              supported.find(
-                (candidate) =>
-                  candidate.api.kind === "azure-devops" &&
-                  candidate.project.repositoryIdentity != null &&
-                  canonicalRepositoryKey(
-                    candidate.project.repositoryIdentity.canonicalKey.toLowerCase(),
-                  ) === repositoryKey,
-              ) ??
-              onHost.find(
-                (candidate) =>
-                  candidate.api.kind !== "azure-devops" &&
-                  candidate.repository.toLowerCase() === repository.toLowerCase(),
-              ) ??
-              onHost.find((candidate) => candidate.api.kind !== "azure-devops");
-            if (route === undefined) {
+          )
+      : listWorkspaceProjects({ projectId: ref.projectId }).pipe(
+          Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
+            const own = supported[0];
+            const repository = ref.repository.trim();
+            const host = ref.host?.trim().toLowerCase();
+            if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
+              // Hostless references only ever meant the project's own repository, and a hosted one
+              // naming it still is; either way the project serves itself.
+              if (host === undefined || host === own.host) return Effect.succeed(own);
+            }
+            if (host === undefined) {
+              if (own === undefined) {
+                return Effect.fail(
+                  new PullRequestUnavailableError({ reason: "provider-unsupported" }),
+                );
+              }
+              // The repository travels through the client, so it is checked against the project's
+              // own remote rather than being handed to a provider verbatim.
               return Effect.fail(
-                new PullRequestUnavailableError({ reason: "provider-unsupported" }),
+                new PullRequestOperationError({
+                  operation: "resolveRepository",
+                  detail: "The change request does not belong to the selected project.",
+                }),
               );
             }
-            return Effect.succeed(
-              route.api.kind === "azure-devops" ? route : { ...route, repository },
+            const repositoryKey = canonicalRepositoryKey(`${host}/${repository}`.toLowerCase());
+            // Azure SSH and legacy clone hosts differ from the browser URL's host. Compare
+            // the complete repository identity before narrowing those checkouts by host.
+            return listWorkspaceProjects(
+              repositoryKey.startsWith("dev.azure.com/") ? {} : { host },
+            ).pipe(
+              Effect.flatMap(({ supported }) => {
+                const onHost = supported.filter((candidate) => candidate.host === host);
+                const route =
+                  supported.find(
+                    (candidate) =>
+                      candidate.api.kind === "azure-devops" &&
+                      candidate.project.repositoryIdentity != null &&
+                      canonicalRepositoryKey(
+                        candidate.project.repositoryIdentity.canonicalKey.toLowerCase(),
+                      ) === repositoryKey,
+                  ) ??
+                  onHost.find(
+                    (candidate) =>
+                      candidate.api.kind !== "azure-devops" &&
+                      candidate.repository.toLowerCase() === repository.toLowerCase(),
+                  ) ??
+                  onHost.find((candidate) => candidate.api.kind !== "azure-devops");
+                if (route === undefined) {
+                  return Effect.fail(
+                    new PullRequestUnavailableError({ reason: "provider-unsupported" }),
+                  );
+                }
+                return Effect.succeed(
+                  route.api.kind === "azure-devops" ? route : { ...route, repository },
+                );
+              }),
             );
           }),
         );
-      }),
-    );
 
   /**
    * What the signed-in account may do with this change request, asked of the host itself. Every
@@ -1535,7 +1596,7 @@ export const make = Effect.gen(function* () {
             capabilities: project.api.capabilities,
             projectId: project.project.id,
             projectTitle: project.project.title,
-            workspaceRoot: project.project.workspaceRoot,
+            workspaceRoot: input.amazonProject?.workspaceRoot ?? project.project.workspaceRoot,
             repository: project.repository,
             number: changeRequest.number,
             title: changeRequest.title,
@@ -1669,6 +1730,11 @@ export const make = Effect.gen(function* () {
               changeType: input.changeType,
               oldPath: input.oldPath,
               newPath: input.newPath,
+              ...(input.packageName === undefined ? {} : { packageName: input.packageName }),
+              ...(input.sourceBlobId === undefined ? {} : { sourceBlobId: input.sourceBlobId }),
+              ...(input.destinationBlobId === undefined
+                ? {}
+                : { destinationBlobId: input.destinationBlobId }),
             }).pipe(Effect.mapError(toPullRequestError("diffFileContents")))
           : Effect.fail(
               new PullRequestOperationError({
@@ -2532,6 +2598,7 @@ export const make = Effect.gen(function* () {
   const stackCodec = Schema.fromJsonString(Schema.NullOr(PullRequestStack));
 
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
+    if (input.amazonProject !== undefined) return summaryUncached(input);
     const key = refCacheKey(input);
     const cached = persistedRead(input, "summary", summaryCodec, summaryUncached(input));
     const held = lastGoodSummary.peek(key);
@@ -2547,12 +2614,14 @@ export const make = Effect.gen(function* () {
   };
 
   const stack: PullRequestService["Service"]["stack"] = (input, options) =>
-    persistedRead(
-      input,
-      `stack:${options?.includeDetails !== false}`,
-      stackCodec,
-      stackUncached(input, options),
-    );
+    input.amazonProject !== undefined
+      ? stackUncached(input, options)
+      : persistedRead(
+          input,
+          `stack:${options?.includeDetails !== false}`,
+          stackCodec,
+          stackUncached(input, options),
+        );
 
   // Keys serialize positionally and parse back in the lookup, so the cache is the only holder
   // of in-flight state: concurrent identical reads coalesce on the key into one host request.
@@ -2603,6 +2672,8 @@ export const make = Effect.gen(function* () {
     },
   );
   const list: PullRequestService["Service"]["list"] = (input) => {
+    // Do not put remote metadata in checkout-keyed or cross-account persistent caches.
+    if (input.amazonProjects !== undefined) return listUncached(input);
     const key = JSON.stringify([
       listingsEpoch,
       input.state,
@@ -2689,6 +2760,7 @@ export const make = Effect.gen(function* () {
     return next.updatedAt >= current.updatedAt;
   };
   const detail: PullRequestService["Service"]["detail"] = (input) => {
+    if (input.amazonProject !== undefined) return detailUncached(input);
     const key = refCacheKey(input);
     // Record the summary from a host or cache read, not the stale value
     // `serveHeld` returns immediately. Skip the write when that read is older
@@ -2717,6 +2789,7 @@ export const make = Effect.gen(function* () {
     },
   );
   const activity: PullRequestService["Service"]["activity"] = (input) => {
+    if (input.amazonProject !== undefined) return activityUncached(input);
     const key = refCacheKey(input);
     return Cache.get(activityCache, key);
   };
@@ -2751,6 +2824,7 @@ export const make = Effect.gen(function* () {
     },
   );
   const diff: PullRequestService["Service"]["diff"] = (input) => {
+    if (input.amazonProject !== undefined) return diffUncached(input);
     const key = JSON.stringify([
       refEpoch(input),
       input.projectId,

@@ -58,6 +58,8 @@ export function resolvePullRequestMergeMethod(
 }
 
 const safeShellArgument = /^[A-Za-z0-9._/@+=,-]+$/;
+export const CRUX_COMMENT_PUBLISH_NOTICE =
+  "Posting here publishes all your draft comments on this revision, including drafts saved in Code Browser.";
 const bitbucketRepositoryName = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 export type PullRequestPrimaryControl =
@@ -127,6 +129,7 @@ export function pullRequestCheckoutCommand(
       }
       return `git clone --single-branch --branch ${headBranch} https://bitbucket.org/${headRepositoryNameWithOwner}.git t3code-pr-${number}`;
     }
+    case "crux":
     case "unknown":
       return null;
   }

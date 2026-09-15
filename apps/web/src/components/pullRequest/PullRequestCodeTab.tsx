@@ -1,8 +1,14 @@
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type {
+  CodeViewItem,
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import type { CodeViewDiffItem, CodeViewHandle } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
+  PullRequestDiffFile,
   PullRequestDiffSide,
   PullRequestOmittedFileStat,
   PullRequestRef,
@@ -13,12 +19,14 @@ import type {
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
   FolderTreeIcon,
   MessageSquareIcon,
   MessageSquareOffIcon,
+  LoaderCircleIcon,
   Rows3Icon,
   TextWrapIcon,
   TriangleAlertIcon,
@@ -26,12 +34,27 @@ import {
 } from "lucide-react";
 import { useAtomRefresh } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
+import {
+  createCruxDiffFileShell,
+  cruxDiffChangeType,
+  cruxDiffFileKey,
+  parseCruxDiffFile,
+  showCruxDiffStats,
+} from "./pullRequestCruxDiff.logic";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
@@ -76,8 +99,10 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
+import { usePullRequestDiffRefresh } from "./usePullRequestDiffRefresh";
 import {
   isFileDiffCollapsed,
+  setFileDiffCollapsed,
   isLineInFileDiff,
   type DiffFoldOverride,
 } from "./pullRequestDiff.logic";
@@ -112,6 +137,7 @@ interface DiffSlice {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
   readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
+  readonly files: ReadonlyArray<PullRequestDiffFile>;
 }
 
 /**
@@ -127,6 +153,27 @@ const REPLACE_FILE_COUNTS_CSS = `
 
 /** Nothing loaded yet, as one identity, so the memos below do not see a new array every render. */
 const NO_SLICES: ReadonlyArray<DiffSlice> = [];
+
+function sameBlobBackedFiles(
+  left: ReadonlyArray<PullRequestDiffFile>,
+  right: ReadonlyArray<PullRequestDiffFile>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((file, index) => {
+      const candidate = right[index];
+      return (
+        candidate !== undefined &&
+        candidate.packageName === file.packageName &&
+        candidate.sourcePath === file.sourcePath &&
+        candidate.destinationPath === file.destinationPath &&
+        candidate.sourceBlobId === file.sourceBlobId &&
+        candidate.destinationBlobId === file.destinationBlobId &&
+        candidate.status === file.status
+      );
+    })
+  );
+}
 
 /** A group while it is still gathering what belongs on its line. */
 interface MutableAnnotationGroup {
@@ -213,7 +260,7 @@ function PullRequestCodeTab({
   /** Absent where there is no active agent composer to receive a local comment. */
   onAddToAgentSelection?: (input: PullRequestAgentSelectionInput) => void;
   onRefresh: () => void;
-  /** Bumped by the panel's refresh button: drop the accumulated pages and re-read the diff. */
+  /** Revalidate the first page without discarding the displayed snapshot or pending blob reads. */
   refreshToken?: number;
 }) {
   const { resolvedTheme } = useTheme();
@@ -251,24 +298,57 @@ function PullRequestCodeTab({
   }>({ key: "", cursor: null, slices: NO_SLICES });
   const parseCache = useRef(new Map<string, RenderablePatch>());
   const [viewer, setViewer] = useState<CodeViewHandle<ReviewAnnotationGroup> | null>(null);
+  const [loadedCruxFiles, setLoadedCruxFiles] = useState<ReadonlyMap<string, FileDiffMetadata>>(
+    () => new Map(),
+  );
+  const [loadingCruxFileKeys, setLoadingCruxFileKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [failedCruxFileKeys, setFailedCruxFileKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const cruxLoadPromises = useRef(new Map<string, Promise<boolean>>());
 
   const referenceKey = pullRequestReviewKey(reference);
   const commit = selectedCommitOid;
   // One commit's own changes and the whole change are two different diffs, paged separately, so
   // everything below is keyed by both.
-  const scopeKey = commit === null ? referenceKey : `${referenceKey}@${commit}`;
+  const scopeKey = `${environmentId}:${commit === null ? referenceKey : `${referenceKey}@${commit}`}`;
+  const activeScopeKeyRef = useRef(scopeKey);
+  activeScopeKeyRef.current = scopeKey;
   // The panel keeps this mounted across pull requests, so an open composer would otherwise
   // survive the switch and attach its comment to whichever one is on screen when it is sent.
-  useEffect(() => {
-    setDraft(null);
-    setSelectedLines(null);
-    setToggledFiles(new Set());
-    setFoldOverride(null);
-    setVisibleCommitCount(COMMIT_PAGE_SIZE);
-    setOrphansOpen(false);
-    setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
-    parseCache.current.clear();
-  }, [scopeKey]);
+  usePullRequestDiffRefresh({
+    scopeKey,
+    refreshToken,
+    resetScope: () => {
+      setDraft(null);
+      setSelectedLines(null);
+      setToggledFiles(new Set());
+      setFoldOverride(null);
+      setVisibleCommitCount(COMMIT_PAGE_SIZE);
+      setOrphansOpen(false);
+      setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
+      setLoadedCruxFiles(new Map());
+      setLoadingCruxFileKeys(new Set());
+      setFailedCruxFileKeys(new Set());
+      cruxLoadPromises.current.clear();
+      parseCache.current.clear();
+    },
+    revalidate: () => {
+      // A turn on any thread in the environment can trigger this. Keep shells, expansion
+      // state and immutable blob-ID loads alive until an actual changed page arrives.
+      // The page reconciliation below discards trailing cursors only when content changes.
+      setSliceState((previous) =>
+        detail.provider === "crux" && previous.key === scopeKey
+          ? previous.cursor === null
+            ? previous
+            : { ...previous, cursor: null }
+          : { key: scopeKey, cursor: null, slices: NO_SLICES },
+      );
+      refreshFirstDiffPage();
+    },
+  });
 
   const loadedSlices = sliceState.key === scopeKey ? sliceState.slices : NO_SLICES;
   const cursor = sliceState.key === scopeKey ? sliceState.cursor : null;
@@ -295,6 +375,7 @@ function PullRequestCodeTab({
         truncated: data.truncated,
         nextCursor: data.nextCursor,
         omittedFileStats: data.omittedFileStats ?? [],
+        files: data.files ?? [],
       };
       const index = slices.findIndex((slice) => slice.cursor === cursor);
       if (index === -1) {
@@ -306,6 +387,7 @@ function PullRequestCodeTab({
         existing.patch === next.patch &&
         existing.truncated === next.truncated &&
         existing.nextCursor === next.nextCursor &&
+        sameBlobBackedFiles(existing.files, next.files) &&
         existing.omittedFileStats.length === next.omittedFileStats.length &&
         existing.omittedFileStats.every((file, index) => {
           const refreshed = next.omittedFileStats[index];
@@ -332,13 +414,6 @@ function PullRequestCodeTab({
       input: { ...reference, ...(commit === null ? {} : { commit }) },
     }),
   );
-  const appliedRefreshToken = useRef(refreshToken);
-  useEffect(() => {
-    if (appliedRefreshToken.current === refreshToken) return;
-    appliedRefreshToken.current = refreshToken;
-    setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
-    refreshFirstDiffPage();
-  }, [refreshToken, scopeKey, refreshFirstDiffPage]);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
@@ -356,6 +431,82 @@ function PullRequestCodeTab({
     reportFailure: false,
   });
   const getDiffFileContents = useAtomCommand(pullRequestEnvironment.diffFileContents);
+  const cruxDiffFiles = useMemo(() => loadedSlices.flatMap((slice) => slice.files), [loadedSlices]);
+  const qualifyCruxPackages = useMemo(
+    () => new Set(cruxDiffFiles.map((file) => file.packageName)).size > 1,
+    [cruxDiffFiles],
+  );
+  const cruxFilesByKey = useMemo(
+    () => new Map(cruxDiffFiles.map((file) => [cruxDiffFileKey(file), file] as const)),
+    [cruxDiffFiles],
+  );
+  const loadCruxFile = useCallback(
+    (fileKey: string): Promise<boolean> => {
+      if (loadedCruxFiles.has(fileKey)) return Promise.resolve(true);
+      const existing = cruxLoadPromises.current.get(fileKey);
+      if (existing) return existing;
+      const file = cruxFilesByKey.get(fileKey);
+      if (!file) return Promise.resolve(false);
+
+      const load = (async () => {
+        setLoadingCruxFileKeys((current) => new Set(current).add(fileKey));
+        setFailedCruxFileKeys((current) => {
+          const next = new Set(current);
+          next.delete(fileKey);
+          return next;
+        });
+        const result = await getDiffFileContents({
+          environmentId,
+          input: {
+            ...reference,
+            ...(commit === null ? {} : { commit }),
+            changeType: cruxDiffChangeType(file),
+            oldPath: file.sourcePath,
+            newPath: file.destinationPath,
+            packageName: file.packageName,
+            sourceBlobId: file.sourceBlobId,
+            destinationBlobId: file.destinationBlobId,
+          },
+        });
+        if (result._tag !== "Success" || activeScopeKeyRef.current !== scopeKey) return false;
+        const parsed = parseCruxDiffFile(file, result.value, qualifyCruxPackages);
+        setLoadedCruxFiles((current) => {
+          const next = new Map(current);
+          next.set(fileKey, parsed);
+          return next;
+        });
+        return true;
+      })()
+        .catch(() => false)
+        .then((loaded) => {
+          if (activeScopeKeyRef.current !== scopeKey) return false;
+          setLoadingCruxFileKeys((current) => {
+            const next = new Set(current);
+            next.delete(fileKey);
+            return next;
+          });
+          if (!loaded) {
+            setFailedCruxFileKeys((current) => new Set(current).add(fileKey));
+          }
+          return loaded;
+        })
+        .finally(() => {
+          cruxLoadPromises.current.delete(fileKey);
+        });
+      cruxLoadPromises.current.set(fileKey, load);
+      return load;
+    },
+    [
+      commit,
+      cruxFilesByKey,
+      environmentId,
+      getDiffFileContents,
+      loadedCruxFiles,
+      qualifyCruxPackages,
+      reference,
+      scopeKey,
+    ],
+  );
   const loadDiffFiles = useMemo(
     () =>
       createPullRequestDiffFileContentsLoader(getDiffFileContents, {
@@ -403,13 +554,20 @@ function PullRequestCodeTab({
     [loadedSlices, resolvedTheme, scopeKey],
   );
   // Ordered within a slice rather than across them: ordering the accumulated set would let a late
-  // slice push a file the reader is part way through further down the page.
+  // slice push a file the reader is part way through further down the page. Blob-backed CRUX rows
+  // keep their GitFarm order and replace only their own shell after a file loads.
   const files = useMemo(
-    () =>
-      parsedSlices.flatMap((parsed) =>
+    () => [
+      ...parsedSlices.flatMap((parsed) =>
         parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
       ),
-    [parsedSlices],
+      ...cruxDiffFiles.map(
+        (file) =>
+          loadedCruxFiles.get(cruxDiffFileKey(file)) ??
+          createCruxDiffFileShell(file, qualifyCruxPackages),
+      ),
+    ],
+    [cruxDiffFiles, loadedCruxFiles, parsedSlices, qualifyCruxPackages],
   );
   const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
@@ -442,6 +600,19 @@ function PullRequestCodeTab({
     }
     return placed;
   }, [commit, detail.reviewThreads, files]);
+
+  // Header-only CRUX entries stay folded until their blobs arrive, including after refresh.
+  // The viewer and its toggle share this state so the first click always loads the file.
+  const isFileCollapsed = useCallback(
+    (fileKey: string) =>
+      (cruxFilesByKey.has(fileKey) && !loadedCruxFiles.has(fileKey)) ||
+      isFileDiffCollapsed(
+        fileKey,
+        foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
+        toggledFiles,
+      ),
+    [cruxFilesByKey, foldOverride, loadedCruxFiles, toggledFiles, settings.diffFilesCollapsed],
+  );
 
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
@@ -485,11 +656,7 @@ function PullRequestCodeTab({
           groupAt(anchor.side, anchor.line).draft = true;
         }
 
-        const collapsed = isFileDiffCollapsed(
-          fileKey,
-          foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
-          toggledFiles,
-        );
+        const collapsed = isFileCollapsed(fileKey);
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -505,7 +672,7 @@ function PullRequestCodeTab({
           // The viewer re-renders an item only when its version changes, so everything the
           // annotations show has to be part of it.
           version: fnv1a32(
-            `${collapsed ? "1" : "0"}:${annotations
+            `${fileDiff.isPartial ? "p" : "f"}:${fileDiff.hunks.length}:${collapsed ? "1" : "0"}:${annotations
               .map(
                 ({ side, lineNumber, metadata }) =>
                   `${side}:${lineNumber}:${metadata.draft ? "d" : ""}:${metadata.pending
@@ -541,6 +708,7 @@ function PullRequestCodeTab({
       files,
       foldOverride,
       pendingComments,
+      isFileCollapsed,
       placedThreadIds,
       settings.diffFilesCollapsed,
       toggledFiles,
@@ -595,18 +763,40 @@ function PullRequestCodeTab({
   // A stable identity: the viewer's SlotPortals memoizes each file's header/annotation portal on
   // these render props, so a fresh function here would recreate every visible file's portal on
   // every tab re-render (a line-selection drag, a keystroke in the draft, a review-store update).
-  const toggleFile = useCallback(
-    (fileKey: string) =>
-      setToggledFiles((current) => {
-        // The override becomes this file's new default the moment it is folded into the set below,
-        // so nothing has to be re-derived when the reader goes back to choosing one at a time.
-        const next = new Set(current);
-        if (next.has(fileKey)) next.delete(fileKey);
-        else next.add(fileKey);
-        return next;
-      }),
-    [],
+  const setFileCollapsed = useCallback(
+    (fileKey: string, collapsed: boolean) =>
+      setToggledFiles((current) => setFileDiffCollapsed(fileKey, collapsed, foldOverride, current)),
+    [foldOverride],
   );
+
+  const fileActionsRef = useRef({
+    cruxFilesByKey,
+    isFileCollapsed,
+    loadCruxFile,
+    loadedCruxFiles,
+    setFileCollapsed,
+  });
+  useLayoutEffect(() => {
+    fileActionsRef.current = {
+      cruxFilesByKey,
+      isFileCollapsed,
+      loadCruxFile,
+      loadedCruxFiles,
+      setFileCollapsed,
+    };
+  }, [cruxFilesByKey, isFileCollapsed, loadCruxFile, loadedCruxFiles, setFileCollapsed]);
+  // Header portals retain one handler; clicks read the latest committed state through the ref.
+  const toggleFile = useCallback((fileKey: string) => {
+    const actions = fileActionsRef.current;
+    const collapsed = actions.isFileCollapsed(fileKey);
+    if (collapsed && actions.cruxFilesByKey.has(fileKey) && !actions.loadedCruxFiles.has(fileKey)) {
+      void actions.loadCruxFile(fileKey).then((loaded) => {
+        if (loaded) fileActionsRef.current.setFileCollapsed(fileKey, false);
+      });
+      return;
+    }
+    actions.setFileCollapsed(fileKey, !collapsed);
+  }, []);
 
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
   const revealFile = useCallback(
@@ -619,13 +809,29 @@ function PullRequestCodeTab({
     [items, requestTreeReveal, toggleFile],
   );
 
-  const toggleAllFiles = () => {
-    // Held as an override of the default rather than as the file keys on screen: a diff that is
-    // still paging would otherwise bring its next slice in folded, moments after the reader
-    // asked for everything to be open.
-    setFoldOverride(areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys) ? "expanded" : "folded");
-    setToggledFiles(new Set());
-  };
+  const toggleAllFiles = useCallback(() => {
+    if (!areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys)) {
+      setFoldOverride("folded");
+      setToggledFiles(new Set());
+      return;
+    }
+
+    void (async () => {
+      const failed: string[] = [];
+      const keys = [...cruxFilesByKey.keys()];
+      for (let index = 0; index < keys.length; index += 4) {
+        if (activeScopeKeyRef.current !== scopeKey) return;
+        const batch = keys.slice(index, index + 4);
+        const results = await Promise.all(
+          batch.map(async (fileKey) => ({ fileKey, loaded: await loadCruxFile(fileKey) })),
+        );
+        failed.push(...results.flatMap((result) => (result.loaded ? [] : [result.fileKey])));
+      }
+      if (activeScopeKeyRef.current !== scopeKey) return;
+      setFoldOverride("expanded");
+      setToggledFiles(new Set(failed));
+    })();
+  }, [collapsedFileKeys, cruxFilesByKey, fileKeys, loadCruxFile, scopeKey]);
 
   // Newest first: the last commit is the one a reader coming back to a change is looking for.
   const orderedCommits = useMemo(
@@ -748,6 +954,33 @@ function PullRequestCodeTab({
   const renderHeaderMetadata = useCallback(
     (item: CodeViewItem<ReviewAnnotationGroup>) => {
       if (item.type !== "diff") return null;
+      if (loadingCruxFileKeys.has(item.id)) {
+        return (
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex items-center" />}>
+              <LoaderCircleIcon
+                aria-label="Loading file diff"
+                className="size-3.5 motion-safe:animate-spin"
+              />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Loading file diff</TooltipPopup>
+          </Tooltip>
+        );
+      }
+      if (failedCruxFileKeys.has(item.id)) {
+        return (
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex items-center" />}>
+              <CircleAlertIcon
+                aria-label="File diff failed to load"
+                className="size-3.5 text-error"
+              />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Select the file to retry</TooltipPopup>
+          </Tooltip>
+        );
+      }
+      if (cruxFilesByKey.has(item.id) && !showCruxDiffStats(item.fileDiff)) return null;
       let additions = 0;
       let deletions = 0;
       for (const hunk of item.fileDiff.hunks) {
@@ -766,7 +999,7 @@ function PullRequestCodeTab({
         />
       );
     },
-    [omittedFileStats],
+    [cruxFilesByKey, failedCruxFileKeys, loadingCruxFileKeys, omittedFileStats],
   );
 
   const diffViewOptions = useMemo(
@@ -819,6 +1052,7 @@ function PullRequestCodeTab({
         thread={thread}
         workspaceRoot={detail.workspaceRoot}
         canReply={review.reply}
+        publishesAllDrafts={detail.provider === "crux"}
         canResolve={review.resolve}
         canReact={detail.capabilities.reactions === true}
         environmentId={environmentId}

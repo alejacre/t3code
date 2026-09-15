@@ -305,6 +305,26 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("preserves GitFarm package case while keeping a lowercase canonical key", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-gitfarm-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["remote", "add", "origin", "ssh://git.amazon.com/pkg/T3CodeAmazonInternal"]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity?.canonicalKey).toBe("git.amazon.com/pkg/t3codeamazoninternal");
+      expect(identity?.displayName).toBe("pkg/T3CodeAmazonInternal");
+      expect(identity?.provider).toBe("crux");
+      expect(identity?.name).toBe("T3CodeAmazonInternal");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect(
     "keeps null identities cached across repeated resolves until the negative TTL expires",
     () =>

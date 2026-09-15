@@ -22,9 +22,13 @@ const textEncoder = new TextEncoder();
 const decodeConnectionCatalog = Schema.decodeEffect(
   Schema.fromJsonString(ConnectionCatalogDocument),
 );
-function makeSafeStorageLayer(available: boolean, failDecrypt: Ref.Ref<boolean> | null = null) {
+function makeSafeStorageLayer(
+  available: boolean | Ref.Ref<boolean>,
+  failDecrypt: Ref.Ref<boolean> | null = null,
+) {
   return Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
-    isEncryptionAvailable: Effect.succeed(available),
+    isEncryptionAvailable:
+      typeof available === "boolean" ? Effect.succeed(available) : Ref.get(available),
     encryptString: (value) => Effect.succeed(textEncoder.encode(`encrypted:${value}`)),
     decryptString: (value) => {
       return Effect.gen(function* () {
@@ -46,7 +50,7 @@ function makeSafeStorageLayer(available: boolean, failDecrypt: Ref.Ref<boolean> 
 
 function makeLayer(
   baseDir: string,
-  encryptionAvailable = true,
+  encryptionAvailable: boolean | Ref.Ref<boolean> = true,
   failDecrypt: Ref.Ref<boolean> | null = null,
   fileSystemLayer: Layer.Layer<FileSystem.FileSystem> = NodeServices.layer,
 ) {
@@ -119,6 +123,45 @@ describe("DesktopConnectionCatalogStore", () => {
       }),
       false,
     ),
+  );
+
+  it.effect(
+    "never reports an existing encrypted catalog as absent while secure storage is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-connection-catalog-availability-test-",
+        });
+        const available = yield* Ref.make(true);
+        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore.pipe(
+          Effect.provide(makeLayer(baseDir, available)),
+        );
+        const catalog = '{"schemaVersion":1,"targets":[{"environmentId":"remote-example"}]}';
+        assert.isTrue(yield* store.set(catalog));
+        const catalogPath = path.join(baseDir, "userdata", "connection-catalog.json");
+        const before = yield* fileSystem.readFileString(catalogPath);
+        yield* Ref.set(available, false);
+
+        const error = yield* store.get.pipe(Effect.flip);
+        assert.instanceOf(
+          error,
+          DesktopConnectionCatalogStore.DesktopConnectionCatalogStoreProtectionError,
+        );
+        assert.equal(error.operation, "check-encryption-availability");
+        assert.include(error.message, "Keychain on macOS");
+        assert.include(error.message, "retry or reopen");
+        assert.notInclude(error.message, catalog);
+        assert.isFalse(yield* store.set('{"schemaVersion":1,"targets":[]}'));
+        assert.equal(yield* fileSystem.readFileString(catalogPath), before);
+
+        // Retrying the same service after availability recovers must reveal the original
+        // catalog, without a rewrite, migration, or new remote registration.
+        yield* Ref.set(available, true);
+        assert.deepStrictEqual(yield* store.get, Option.some(catalog));
+        assert.equal(yield* fileSystem.readFileString(catalogPath), before);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("migrates legacy relay, SSH, bearer profile, and credential data", () =>

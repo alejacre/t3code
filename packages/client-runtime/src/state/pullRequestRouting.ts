@@ -349,6 +349,9 @@ export function createPullRequestRouter() {
     tag: T,
     input: EnvironmentRpcInput<T>,
   ) {
+    // The beta reader has already selected a local, read-only CRUX connector. Do not
+    // hedge against the execution server or apply GitHub account-routing permissions.
+    if (isRef(input) && input.amazonProject !== undefined) return yield* request(tag, input);
     if (!reads.has(tag) || !isRef(input)) return yield* routedRequest(tag, input);
     const registry = yield* EnvironmentRegistry;
     const entries = yield* SubscriptionRef.get(registry.entries);

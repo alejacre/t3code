@@ -7,6 +7,7 @@ import {
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -228,21 +229,38 @@ export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compres
   global: true,
 });
 
+/**
+ * Set by the Amazon Cloud Desktop deployment (`scripts/t3code-amazon.mjs`). Behind an Amazon
+ * Tunnel every request carries the tunnel's OIDC cookie, so the desktop renderer's requests are
+ * credentialed and its custom origins must stay explicit instead of the wildcard default.
+ */
+const AmazonTunnelFrontedConfig = Config.string("T3CODE_INTERNAL_ONLY").pipe(
+  Config.withDefault(""),
+  Config.map((value) => value.trim() === "1"),
+);
+const readAmazonTunnelFronted = AmazonTunnelFrontedConfig.pipe(Effect.orElseSucceed(() => false));
+
 export const browserApiCorsLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
+    const amazonTunnelFronted = yield* readAmazonTunnelFronted;
     // Dev uses credentialed requests from Vite or the Electron custom origin, so both must be
-    // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin.
+    // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin,
+    // except behind an Amazon Tunnel where the OIDC cookie makes every request credentialed.
     //
     // T3CODE_DEV_ALLOWED_ORIGINS covers dev servers reached from a second
     // origin — a tailnet name, a LAN IP, a phone. Browser dev normally proxies
     // through Vite and is same-origin (no preflight at all), so this is a
     // safety net for the desktop renderer and any direct-to-backend caller.
     return HttpRouter.cors({
-      ...(devOrigin
+      ...(devOrigin || amazonTunnelFronted
         ? {
-            allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
+            allowedOrigins: [
+              ...(devOrigin ? [devOrigin] : []),
+              ...DESKTOP_RENDERER_ORIGINS,
+              ...config.devAllowedOrigins,
+            ],
             credentials: true,
           }
         : {}),

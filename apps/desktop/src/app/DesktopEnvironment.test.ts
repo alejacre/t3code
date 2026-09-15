@@ -40,6 +40,15 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it("keeps the beta visibly separate from stable", () => {
+    assert.equal(
+      DesktopEnvironment.resolveDesktopAppBranding({
+        isDevelopment: false,
+        appVersion: "0.0.40-beta.2",
+      }).displayName,
+      "T3 Custom Beta",
+    );
+  });
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

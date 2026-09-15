@@ -83,6 +83,9 @@ export const makeKiroAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
+        // Stop must await Kiro's terminal prompt response. Interrupting the
+        // local RPC alone leaves the agent working and corrupts the next turn.
+        cancelBehavior: "wait-for-prompt",
         spawn: buildKiroAcpSpawnInput(
           input.kiroSettings,
           input.cwd,

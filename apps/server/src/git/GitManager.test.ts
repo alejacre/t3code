@@ -717,6 +717,23 @@ const GitManagerTestLayer = GitVcsDriver.layer.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("blocks Amazon beta pushes before committing or contacting a remote", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-amazon-readonly-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["remote", "add", "origin", "ssh://git.amazon.com/pkg/BetaReadOnlyTest"]);
+      const before = yield* runGit(repoDir, ["rev-parse", "HEAD"]);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(NodePath.join(repoDir, "README.md"), "uncommitted work\n");
+      const { manager, ghCalls } = yield* makeManager();
+      const result = yield* runStackedAction(manager, { cwd: repoDir, action: "commit_push", commitMessage: "must not commit" }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      const after = yield* runGit(repoDir, ["rev-parse", "HEAD"]);
+      expect(after.stdout).toBe(before.stdout);
+      expect(ghCalls).toEqual([]);
+      expect(yield* fs.readFileString(NodePath.join(repoDir, "README.md"))).toBe("uncommitted work\n");
+    }),
+  );
   it.effect("status includes draft PR metadata when branch already has a draft PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

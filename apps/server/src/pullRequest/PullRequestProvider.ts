@@ -18,6 +18,7 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestDiffFile,
   PullRequestOmittedFileStat,
   PullRequestReaction,
   PullRequestReactionContent,
@@ -251,6 +252,8 @@ export interface ProviderDiffSlice {
   readonly nextCursor: string | null;
   /** The host's own counts for the files whose hunks it withheld from this slice. */
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
+  /** Blob-backed file identities for providers that load file contents lazily. */
+  readonly files?: ReadonlyArray<PullRequestDiffFile>;
 }
 
 export interface ProviderDiffFileContents {
@@ -445,6 +448,9 @@ export interface PullRequestProviderApi {
       readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
       readonly oldPath: string;
       readonly newPath: string;
+      readonly packageName?: string | undefined;
+      readonly sourceBlobId?: string | undefined;
+      readonly destinationBlobId?: string | undefined;
     },
   ) => Effect.Effect<ProviderDiffFileContents, PullRequestProviderError>;
 

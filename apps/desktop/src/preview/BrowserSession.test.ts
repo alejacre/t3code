@@ -6,8 +6,10 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { fromPartition, sessions } = vi.hoisted(() => ({
+const { configureBrowserSession, fromPartition, sessions, syncMidwaySession } = vi.hoisted(() => ({
+  configureBrowserSession: vi.fn(),
   fromPartition: vi.fn(),
+  syncMidwaySession: vi.fn(),
   sessions: new Map<
     string,
     {
@@ -27,12 +29,34 @@ vi.mock("electron", () => ({
   },
 }));
 
+import * as DesktopAmazonEnterpriseAccess from "../amazon/DesktopAmazonEnterpriseAccess.ts";
+import * as AmznMidwayCookieSync from "../amazon/electron/AmznMidwayCookieSync.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 
-const layer = BrowserSession.layer.pipe(Layer.provide(NodeServices.layer));
+const amazonEnterpriseAccessLayer = Layer.succeed(
+  DesktopAmazonEnterpriseAccess.DesktopAmazonEnterpriseAccess,
+  DesktopAmazonEnterpriseAccess.DesktopAmazonEnterpriseAccess.of({
+    configureBrowserSession,
+  }),
+);
+const midwayCookieSyncLayer = Layer.succeed(
+  AmznMidwayCookieSync.AmznMidwayCookieSync,
+  AmznMidwayCookieSync.AmznMidwayCookieSync.of({
+    syncSession: syncMidwaySession,
+  }),
+);
+const layer = BrowserSession.layer.pipe(
+  Layer.provide(NodeServices.layer),
+  Layer.provide(amazonEnterpriseAccessLayer),
+  Layer.provide(midwayCookieSyncLayer),
+);
 
 describe("BrowserSession", () => {
   beforeEach(() => {
+    configureBrowserSession.mockReset();
+    configureBrowserSession.mockImplementation(() => Effect.void);
+    syncMidwaySession.mockReset();
+    syncMidwaySession.mockImplementation(() => Effect.void);
     sessions.clear();
     fromPartition.mockReset();
     fromPartition.mockImplementation((partition: string) => {
@@ -60,6 +84,12 @@ describe("BrowserSession", () => {
       assert.strictEqual(partition, "persist:t3code-preview-f051bb2c68cb7b2fe969");
       assert.strictEqual(first, second);
       assert.strictEqual(fromPartition.mock.calls.length, 1);
+      assert.strictEqual(configureBrowserSession.mock.calls.length, 1);
+      assert.strictEqual(configureBrowserSession.mock.calls[0]?.[0], first);
+      assert.deepEqual(syncMidwaySession.mock.calls, [
+        [first, false],
+        [first, false],
+      ]);
     }).pipe(Effect.provide(layer)),
   );
 
@@ -218,7 +248,15 @@ describe("BrowserSession", () => {
         "Failed to derive a desktop preview browser partition for scope environment-a.",
       );
       assert.notInclude(error.message, nativeCause.message);
-    }).pipe(Effect.provide(BrowserSession.layer.pipe(Layer.provide(failingCryptoLayer))));
+    }).pipe(
+      Effect.provide(
+        BrowserSession.layer.pipe(
+          Layer.provide(failingCryptoLayer),
+          Layer.provide(amazonEnterpriseAccessLayer),
+          Layer.provide(midwayCookieSyncLayer),
+        ),
+      ),
+    );
   });
 
   it.effect("preserves session scope, partition, and the Electron failure", () =>

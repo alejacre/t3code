@@ -79,6 +79,16 @@ const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
 };
 
+const CRUX_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "change-request",
+  providerName: "CRUX",
+  shortName: "CR",
+  longName: "code review",
+  pluralLongName: "code reviews",
+  providerLongName: "CRUX code review",
+  urlExample: "https://code.amazon.com/reviews/CR-123456",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -104,6 +114,8 @@ export function resolveChangeRequestPresentation(
       return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
     case "bitbucket":
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
+    case "crux":
+      return CRUX_CHANGE_REQUEST_PRESENTATION;
     case "unknown":
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
@@ -204,6 +216,10 @@ function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
 
+function isGitFarmHost(host: string): boolean {
+  return host === "git.amazon.com";
+}
+
 export function detectSourceControlProviderFromRemoteUrl(
   remoteUrl: string,
 ): SourceControlProviderInfo | null {
@@ -259,6 +275,14 @@ export function detectSourceControlProviderFromRemoteUrl(
     };
   }
 
+  if (isGitFarmHost(hostname)) {
+    return {
+      kind: "crux",
+      name: "CRUX",
+      baseUrl: "https://code.amazon.com",
+    };
+  }
+
   return {
     kind: "unknown",
     name: host,
@@ -286,7 +310,7 @@ export function sourceControlRepositorySelector(
     | undefined,
 ): string | null {
   if (!identity) return null;
-  if (identity.provider === "azure-devops") {
+  if (identity.provider === "azure-devops" || identity.provider === "crux") {
     const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
     return identity.name || segments.at(-1) || null;
   }

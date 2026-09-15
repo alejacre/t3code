@@ -27,6 +27,8 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  /** Enables Midway/AEA browser auth and Amazon Tunnel connections. */
+  readonly amazonEnabled?: boolean;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -38,6 +40,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly processArch: string;
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
+    readonly amazonEnabled: boolean;
     readonly appVersion: string;
     readonly appPath: string;
     readonly resourcesPath: string;
@@ -109,7 +112,11 @@ export function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: stageLabel === "Alpha" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: input.appVersion.includes("-beta.")
+      ? "T3 Custom Beta"
+      : stageLabel === "Alpha"
+        ? APP_BASE_NAME
+        : `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 
@@ -151,6 +158,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const amazonEnabled = input.amazonEnabled === true;
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -196,6 +204,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     processArch: input.processArch,
     isPackaged: input.isPackaged,
     isDevelopment,
+    amazonEnabled,
     appVersion: input.appVersion,
     appPath: input.appPath,
     resourcesPath,

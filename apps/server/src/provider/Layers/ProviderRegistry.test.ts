@@ -490,6 +490,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.status, "authenticated");
           assert.strictEqual(status.auth.type, "apiKey");
           assert.strictEqual(status.auth.label, "OpenAI API Key");
+          assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+          assert.deepStrictEqual(status.usageLimits?.windows, []);
         }),
       );
 
@@ -510,7 +512,42 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.status, "authenticated");
           assert.strictEqual(status.auth.type, "amazonBedrock");
           assert.strictEqual(status.auth.label, "Amazon Bedrock");
+          assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+          assert.ok(status.usageLimits?.unavailable?.message?.includes("API-billed"));
+          assert.deepStrictEqual(status.usageLimits?.windows, []);
         }),
+      );
+
+      it.effect(
+        "preserves supported ChatGPT quotas and genuine usage failures without changing auth",
+        () =>
+          Effect.gen(function* () {
+            const supported = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  rateLimits: {
+                    snapshot: { primary: { usedPercent: 42, windowDurationMins: 300 } },
+                    resetCredits: undefined,
+                  },
+                }),
+              ),
+            );
+            assert.strictEqual(supported.usageLimits?.windows[0]?.usedPercent, 42);
+            assert.strictEqual(supported.usageLimits?.unavailable, undefined);
+            const failed = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  rateLimits: { failure: "Codex could not read usage (JSON-RPC -32600)." },
+                }),
+              ),
+            );
+            assert.strictEqual(failed.auth.status, "authenticated");
+            assert.strictEqual(failed.status, "ready");
+            assert.deepStrictEqual(failed.usageLimits?.unavailable, {
+              reason: "probeFailed",
+              message: "Codex could not read usage (JSON-RPC -32600).",
+            });
+          }),
       );
 
       it.effect("returns unavailable when codex is missing", () =>
@@ -2529,7 +2566,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       );
 
       it.effect(
-        "keeps Cursor disabled and skips provider probing when settings use their defaults",
+        "registers only the fork's three default drivers and never probes hidden Cursor",
         () =>
           Effect.gen(function* () {
             const serverSettings = yield* makeMutableServerSettingsService(
@@ -2611,19 +2648,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               );
 
               assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
-                "antigravity",
                 "claudeAgent",
                 "codex",
-                "cursor",
-                "grok",
-                "opencode",
+                "kiro",
               ]);
-              assert.strictEqual(cursorProvider?.enabled, false);
-              assert.strictEqual(cursorProvider?.status, "disabled");
-              assert.strictEqual(
-                cursorProvider?.message,
-                "Cursor is disabled in T3 Code settings.",
-              );
+              assert.strictEqual(cursorProvider, undefined);
               assert.strictEqual(cursorSpawned, false);
             }).pipe(Effect.provide(runtimeServices));
           }),

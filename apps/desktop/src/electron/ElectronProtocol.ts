@@ -5,12 +5,19 @@ import * as NodeTimersPromises from "node:timers/promises";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import {
+  AMAZON_TUNNEL_DESKTOP_PROXY_PATH,
+  AMAZON_TUNNEL_DESKTOP_TARGET_HEADER,
+  isAmazonTunnelUrl,
+} from "@t3tools/shared/amazonTunnel";
 
 import * as Electron from "electron";
 
 export const DESKTOP_HOST = "app";
 const DESKTOP_PRODUCTION_SCHEME = "t3code";
 const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+const AMAZON_TUNNEL_OIDC_COOKIE_NAME = "oidc-auth";
+const AMAZON_TUNNEL_ENVIRONMENT_DESCRIPTOR_PATH = "/.well-known/t3/environment";
 
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
@@ -53,6 +60,8 @@ export interface DesktopProtocolRegistrationInput {
   readonly targetOrigin: URL;
   readonly backendOrigin: URL;
   readonly clerkFrontendApiHostname: string | undefined;
+  /** Enables the Amazon Tunnel proxy path used to carry the tunnel OIDC cookie. */
+  readonly amazonEnabled?: boolean;
 }
 
 export class ElectronProtocol extends Context.Service<
@@ -146,17 +155,35 @@ async function proxyRequest(
   request: Request,
   targetOrigin: URL,
   contentSecurityPolicy: string,
+  amazonEnabled: boolean,
 ): Promise<Response> {
   const requestUrl = new URL(request.url);
   if (requestUrl.host !== DESKTOP_HOST) {
     return new Response(null, { status: 404 });
   }
 
+  if (requestUrl.pathname === AMAZON_TUNNEL_DESKTOP_PROXY_PATH) {
+    if (!amazonEnabled) {
+      return new Response(null, { status: 404 });
+    }
+    return proxyAmazonTunnelRequest(request);
+  }
+
   const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, targetOrigin);
+  const init = forwardedRequestInit(request);
+  const response =
+    request.method === "GET" || request.method === "HEAD"
+      ? await fetchWithTransientRetry(targetUrl.toString(), init)
+      : await Electron.net.fetch(targetUrl.toString(), init);
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+}
+
+function forwardedRequestInit(request: Request): RequestInit {
   const headers = new Headers(request.headers);
   const headersToRemove: string[] = [];
   for (const name of headers.keys()) {
     if (
+      name === AMAZON_TUNNEL_DESKTOP_TARGET_HEADER ||
       name === "host" ||
       name === "origin" ||
       name === "referer" ||
@@ -180,11 +207,54 @@ async function proxyRequest(
     init.body = request.body;
     (init as RequestInit & { duplex: "half" }).duplex = "half";
   }
-  const response =
-    request.method === "GET" || request.method === "HEAD"
-      ? await fetchWithTransientRetry(targetUrl.toString(), init)
-      : await Electron.net.fetch(targetUrl.toString(), init);
-  return withContentSecurityPolicy(response, contentSecurityPolicy);
+  return init;
+}
+
+async function proxyAmazonTunnelRequest(request: Request): Promise<Response> {
+  const targetUrl = request.headers.get(AMAZON_TUNNEL_DESKTOP_TARGET_HEADER);
+  if (targetUrl === null || !isAmazonTunnelUrl(targetUrl)) {
+    return new Response(null, { status: 400 });
+  }
+  const parsedTargetUrl = new URL(targetUrl);
+
+  const [oidcCookie] = await Electron.session.defaultSession.cookies.get({
+    url: targetUrl,
+    name: AMAZON_TUNNEL_OIDC_COOKIE_NAME,
+  });
+  if (oidcCookie === undefined) {
+    return new Response(null, { status: 401 });
+  }
+
+  const init = forwardedRequestInit(request);
+  const headers = new Headers(init.headers);
+  headers.set("cookie", `${AMAZON_TUNNEL_OIDC_COOKIE_NAME}=${oidcCookie.value}`);
+  if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
+    init.body = await request.arrayBuffer();
+    delete (init as RequestInit & { duplex?: "half" }).duplex;
+  }
+
+  // @effect-diagnostics-next-line globalFetch:off - Electron fetch strips this cookie; Node fetch matches the official tunnel CLI.
+  const response = await globalThis.fetch(targetUrl, {
+    ...init,
+    headers,
+  });
+  if (
+    response.status === 401 &&
+    parsedTargetUrl.pathname === AMAZON_TUNNEL_ENVIRONMENT_DESCRIPTOR_PATH
+  ) {
+    await Electron.session.defaultSession.cookies.remove(
+      parsedTargetUrl.origin,
+      AMAZON_TUNNEL_OIDC_COOKIE_NAME,
+    );
+  }
+  const responseHeaders = new Headers(response.headers);
+  responseHeaders.delete("content-encoding");
+  responseHeaders.delete("content-length");
+  return new Response(response.body === null ? null : await response.arrayBuffer(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  });
 }
 
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
@@ -221,7 +291,12 @@ export const make = Effect.gen(function* () {
         Effect.try({
           try: () => {
             Electron.protocol.handle(input.scheme, (request) =>
-              proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
+              proxyRequest(
+                request,
+                input.targetOrigin,
+                contentSecurityPolicy,
+                input.amazonEnabled === true,
+              ),
             );
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),

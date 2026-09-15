@@ -202,6 +202,25 @@ describe("VcsProcess.run", () => {
     }).pipe(provideLive),
   );
 
+  it.effect("classifies expired Midway sessions as authentication failures", () =>
+    Effect.gen(function* () {
+      const error = yield* run({
+        operation: "test.midway-authentication",
+        command: "node",
+        args: [
+          "-e",
+          "process.stderr.write('Run mwinit to refresh your Midway session'); process.exit(1)",
+        ],
+        cwd: process.cwd(),
+      }).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        detail: "Authentication failed.",
+        failureKind: "authentication",
+      });
+    }).pipe(provideLive),
+  );
+
   it.effect("classifies API rate limits without retaining provider stderr", () =>
     Effect.gen(function* () {
       const providerStderr =

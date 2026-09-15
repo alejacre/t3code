@@ -31,6 +31,18 @@ describe("parsePullRequestReference", () => {
     expect(parsePullRequestReference("42")).toBe("42");
   });
 
+  it("accepts CRUX review ids", () => {
+    expect(parsePullRequestReference("CR-123456")).toBe("123456");
+  });
+
+  it.each(["code.amazon.com", "cr.amazon.dev"])("accepts review links on %s", (host) => {
+    for (const suffix of ["", "/revisions/2", "/revisions/2/diff?file=src%2Fapp.ts#L8"]) {
+      const url = `https://${host}/reviews/CR-123456${suffix}`;
+      expect(parsePullRequestReference(` ${url} `)).toBe(url);
+    }
+    expect(parsePullRequestReference(`https://${host}.example.org/reviews/CR-123456`)).toBeNull();
+  });
+
   it("accepts #number references", () => {
     expect(parsePullRequestReference("#42")).toBe("42");
   });

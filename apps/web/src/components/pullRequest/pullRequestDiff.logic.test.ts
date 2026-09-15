@@ -1,7 +1,28 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isFileDiffCollapsed, isLineInFileDiff } from "./pullRequestDiff.logic";
+import {
+  isFileDiffCollapsed,
+  isLineInFileDiff,
+  setFileDiffCollapsed,
+} from "./pullRequestDiff.logic";
+
+describe("file fold state updates", () => {
+  it.each([null, "folded", "expanded"] as const)(
+    "round-trips a user's choice with %s override",
+    (override) => {
+      const initial: ReadonlySet<string> = new Set(["other.ts"]);
+      const closed = setFileDiffCollapsed("selected.ts", true, override, initial);
+      expect(isFileDiffCollapsed("selected.ts", override, closed)).toBe(true);
+      const opened = setFileDiffCollapsed("selected.ts", false, override, closed);
+      expect(isFileDiffCollapsed("selected.ts", override, opened)).toBe(false);
+      expect(isFileDiffCollapsed("other.ts", override, opened)).toBe(
+        isFileDiffCollapsed("other.ts", override, initial),
+      );
+      expect([...initial]).toEqual(["other.ts"]);
+    },
+  );
+});
 
 /** Only the hunk ranges matter here; the viewer fills the rest in when it renders. */
 function fileWithHunks(

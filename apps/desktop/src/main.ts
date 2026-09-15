@@ -22,6 +22,10 @@ import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
+import { isAmazonFeaturesEnabled } from "./amazon/AmazonFeatures.ts";
+import * as DesktopAmazonEnterpriseAccess from "./amazon/DesktopAmazonEnterpriseAccess.ts";
+import * as DesktopAmazonTunnelAuth from "./amazon/DesktopAmazonTunnelAuth.ts";
+import * as AmznMidwayCookieSync from "./amazon/electron/AmznMidwayCookieSync.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
@@ -82,6 +86,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       homeDirectory: NodeOS.homedir(),
       platform,
       processArch,
+      amazonEnabled: isAmazonFeaturesEnabled,
       ...metadata,
     });
   }),
@@ -134,6 +139,10 @@ const electronLayer = Layer.mergeAll(
   DesktopIpc.layer(Electron.ipcMain),
 );
 
+const amznMidwayCookieSyncLayer = AmznMidwayCookieSync.layer.pipe(
+  Layer.provide(desktopEnvironmentLayer),
+);
+
 const desktopFoundationLayer = Layer.mergeAll(
   MacPermissions.layer,
   DesktopState.layer,
@@ -143,6 +152,7 @@ const desktopFoundationLayer = Layer.mergeAll(
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,
   DesktopObservability.layer,
+  DesktopAmazonTunnelAuth.layer.pipe(Layer.provide(amznMidwayCookieSyncLayer)),
 ).pipe(Layer.provideMerge(desktopEnvironmentLayer));
 
 const desktopSshLayer = desktopSshEnvironmentLayer.pipe(
@@ -159,7 +169,12 @@ const desktopPreviewLayer = PreviewManager.layer.pipe(
   // service alongside the manager; both sit on the same BrowserSession.
   Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
   Layer.provideMerge(MidwayRefresh.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
-  Layer.provideMerge(BrowserSession.layer),
+  Layer.provideMerge(
+    BrowserSession.layer.pipe(
+      Layer.provideMerge(DesktopAmazonEnterpriseAccess.layer),
+      Layer.provide(amznMidwayCookieSyncLayer),
+    ),
+  ),
   Layer.provideMerge(desktopFoundationLayer),
 );
 

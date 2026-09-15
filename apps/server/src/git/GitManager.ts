@@ -2087,7 +2087,7 @@ export const make = Effect.gen(function* () {
       phase: "pr",
       label: `Creating ${terms.singular}...`,
     });
-    yield* provider
+    const createdByProvider = yield* provider
       .createChangeRequest({
         cwd,
         baseRefName: baseBranch,
@@ -2097,7 +2097,7 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
 
-    const created = yield* findOpenPr(cwd, headContext);
+    const created = createdByProvider ?? (yield* findOpenPr(cwd, headContext));
     if (!created) {
       return {
         status: "created" as const,
@@ -2645,6 +2645,14 @@ export const make = Effect.gen(function* () {
           (input.action === "create_pr" &&
             (!initialStatus.hasUpstream || initialStatus.aheadCount > 0));
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
+
+        if (wantsPush || wantsPr) {
+          const remotes = yield* gitCore.execute({ operation: "amazonBetaWriteGate", cwd: input.cwd, args: ["remote", "-v"] });
+          if (remotes.stdout.split(/\s+/u).some((url) => detectSourceControlProviderFromGitRemoteUrl(url)?.kind === "crux")) {
+            return yield* new GitManagerError({ operation: "runStackedAction", cwd: input.cwd,
+              detail: "Amazon beta is read-only. Commit locally, then publish code outside T3." });
+          }
+        }
 
         if (input.featureBranch && !wantsCommit) {
           return yield* new GitManagerError({

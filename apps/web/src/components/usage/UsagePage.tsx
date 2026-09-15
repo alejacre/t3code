@@ -105,6 +105,9 @@ export function UsagePage() {
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
+  const [limitsRefreshFailures, setLimitsRefreshFailures] = useState<
+    ReadonlyArray<{ environmentId: EnvironmentId; label: string }>
+  >([]);
   const refreshingRef = useRef(false);
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
@@ -172,17 +175,23 @@ export function UsagePage() {
       refreshingRef.current = true;
       setIsRefreshing(true);
       void Promise.all(
-        Array.from(presentations, ([environmentId, presentation]) => {
+        Array.from(presentations, async ([environmentId, presentation]) => {
           if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) return;
           if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
-            return refreshProviders({ environmentId, input: {} });
+            const result = await refreshProviders({ environmentId, input: {} });
+            if (result._tag === "Success") return;
           }
+          return { environmentId, label: presentation.entry.target.label };
         }),
-      ).finally(() => {
-        setLimitsNow(Date.now());
-        refreshingRef.current = false;
-        setIsRefreshing(false);
-      });
+      )
+        .then((results) => {
+          setLimitsRefreshFailures(results.flatMap((result) => (result ? [result] : [])));
+        })
+        .finally(() => {
+          setLimitsNow(Date.now());
+          refreshingRef.current = false;
+          setIsRefreshing(false);
+        });
       return;
     }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
@@ -353,7 +362,22 @@ export function UsagePage() {
                   : `Select an environment to see ${showingLimits ? "limits" : "usage"}.`}
               </p>
             ) : showingLimits ? (
-              <UsageLimitsSection selectedEnvironmentIds={selectedEnvironmentIds} now={limitsNow} />
+              <>
+                {limitsRefreshFailures
+                  .filter(
+                    ({ environmentId }) =>
+                      selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId),
+                  )
+                  .map(({ environmentId, label }) => (
+                    <p key={environmentId} role="alert" className="text-sm text-muted-foreground">
+                      {label} could not refresh limits. Showing the last known values.
+                    </p>
+                  ))}
+                <UsageLimitsSection
+                  selectedEnvironmentIds={selectedEnvironmentIds}
+                  now={limitsNow}
+                />
+              </>
             ) : isPending ? (
               <UsageSkeleton />
             ) : (

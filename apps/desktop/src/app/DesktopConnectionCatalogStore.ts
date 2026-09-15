@@ -142,6 +142,9 @@ export class DesktopConnectionCatalogStoreProtectionError extends Schema.TaggedE
   },
 ) {
   override get message(): string {
+    if (this.operation === "check-encryption-availability") {
+      return "Saved connections could not be read because OS secure storage is unavailable. Unlock your credential store (Keychain on macOS), then retry or reopen T3 Code. Your saved connection catalog has not been changed.";
+    }
     return `Desktop connection catalog protection failed during ${this.operation} at ${this.catalogPath}.`;
   }
 }
@@ -478,7 +481,13 @@ export const make = Effect.gen(function* () {
         return yield* migrateLegacyCatalog;
       }
       if (!(yield* encryptionAvailable)) {
-        return Option.none<string>();
+        // None means there are no saved connections. Returning it for an existing
+        // encrypted file poisons the renderer's cache with a false empty catalog.
+        return yield* new DesktopConnectionCatalogStoreProtectionError({
+          operation: "check-encryption-availability",
+          catalogPath,
+          cause: new Error("OS secure storage is unavailable."),
+        });
       }
       const decrypted = yield* decodeSecretBytes(catalogPath, document.value.encryptedCatalog).pipe(
         Effect.flatMap((encryptedCatalog) =>

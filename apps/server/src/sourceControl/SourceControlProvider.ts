@@ -107,7 +107,7 @@ export class SourceControlProvider extends Context.Service<
       readonly headSelector: string;
       readonly title: string;
       readonly bodyFile: string;
-    }) => Effect.Effect<void, SourceControlProviderError>;
+    }) => Effect.Effect<ChangeRequest | void, SourceControlProviderError>;
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;

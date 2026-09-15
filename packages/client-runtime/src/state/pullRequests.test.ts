@@ -237,6 +237,106 @@ const TARGET = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://environment.example.test",
 });
 
+it.effect(
+  "keeps Amazon metadata reads on the selected connector without GitHub probes or hedges",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ endpoint: string; input: unknown }> = [];
+      const clientFor = (endpoint: string) =>
+        ({
+          [WS_METHODS.pullRequestsSummary]: (input: unknown) =>
+            Effect.sync(() => {
+              calls.push({ endpoint, input });
+              return { title: "Read by the selected connector" };
+            }),
+          [WS_METHODS.pullRequestsRouting]: () =>
+            Effect.die("Amazon must not probe GitHub identity"),
+          [WS_METHODS.pullRequestsRoutingIdentity]: () =>
+            Effect.die("Amazon must not probe alternate accounts"),
+        }) as unknown as WsRpcProtocolClient;
+      const { environmentRegistry } = yield* makeTestRuntime(
+        clientFor("execution"),
+        clientFor("reader"),
+      );
+      const input = {
+        projectId: ProjectId.make("remote-project"),
+        repository: "ExamplePackage",
+        host: "code.amazon.com",
+        number: 42,
+        amazonProject: {
+          environmentId: TARGET.environmentId,
+          projectId: ProjectId.make("remote-project"),
+          title: "Remote project",
+          repository: "ExamplePackage",
+          workspaceRoot: "/remote/src/ExamplePackage",
+        },
+      };
+      const result = yield* environmentRegistry
+        .run(
+          EnvironmentId.make("local-environment"),
+          createPullRequestRouter()(WS_METHODS.pullRequestsSummary, input),
+        )
+        .pipe(
+          Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+          Effect.provideService(GitHubRoutingPermissions, {
+            ...trustedRouting,
+            get: () => Effect.die("Amazon must not consult GitHub routing permissions"),
+          }),
+        );
+      expect(result).toEqual({ title: "Read by the selected connector" });
+      expect(calls).toEqual([{ endpoint: "reader", input }]);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("does not retry an Amazon reader failure on the execution environment", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const failure = new PullRequestOperationError({
+      operation: "summary",
+      detail: "Amazon beta disabled",
+    });
+    const clientFor = (endpoint: string) =>
+      ({
+        [WS_METHODS.pullRequestsSummary]: () =>
+          Effect.gen(function* () {
+            calls.push(endpoint);
+            return yield* failure;
+          }),
+      }) as unknown as WsRpcProtocolClient;
+    const { environmentRegistry } = yield* makeTestRuntime(
+      clientFor("execution"),
+      clientFor("reader"),
+    );
+    const input = {
+      projectId: ProjectId.make("remote-project"),
+      repository: "ExamplePackage",
+      host: "code.amazon.com",
+      number: 42,
+      amazonProject: {
+        environmentId: TARGET.environmentId,
+        projectId: ProjectId.make("remote-project"),
+        title: "Remote project",
+        repository: "ExamplePackage",
+      },
+    };
+    const result = yield* environmentRegistry
+      .run(
+        EnvironmentId.make("local-environment"),
+        createPullRequestRouter()(WS_METHODS.pullRequestsSummary, input),
+      )
+      .pipe(
+        Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+        Effect.provideService(GitHubRoutingPermissions, {
+          ...trustedRouting,
+          get: () => Effect.die("Unexpected alternate routing"),
+        }),
+        Effect.result,
+      );
+    expect(result).toMatchObject({ _tag: "Failure", failure });
+    expect(calls).toEqual(["reader"]);
+  }).pipe(Effect.scoped),
+);
+
 function session(client: WsRpcProtocolClient): RpcSession {
   return {
     client: {

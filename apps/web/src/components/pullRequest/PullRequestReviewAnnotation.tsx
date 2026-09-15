@@ -26,6 +26,7 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
 import {
+  CRUX_COMMENT_PUBLISH_NOTICE,
   editPullRequestThreadComment,
   mergePullRequestThreadComments,
 } from "./pullRequestDetail.logic";
@@ -94,6 +95,7 @@ export function ReviewThreadCard({
   thread,
   workspaceRoot,
   canReply,
+  publishesAllDrafts = false,
   canResolve,
   canReact,
   environmentId,
@@ -112,6 +114,8 @@ export function ReviewThreadCard({
   thread: PullRequestReviewThread;
   workspaceRoot: string;
   canReply: boolean;
+  /** The host also publishes draft comments saved outside this client. */
+  publishesAllDrafts?: boolean;
   canResolve: boolean;
   canReact: boolean;
   environmentId: EnvironmentId;
@@ -343,6 +347,11 @@ export function ReviewThreadCard({
                     onCancel: () => setReplying(false),
                   })}
                 />
+                {publishesAllDrafts ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {CRUX_COMMENT_PUBLISH_NOTICE}
+                  </p>
+                ) : null}
                 <div className="mt-2 flex justify-end gap-2">
                   <Button size="xs" variant="ghost" onClick={() => setReplying(false)}>
                     Cancel
@@ -352,7 +361,7 @@ export function ReviewThreadCard({
                     disabled={pending || reply.trim().length === 0}
                     onClick={() => void send()}
                   >
-                    Reply
+                    {publishesAllDrafts ? "Reply and publish drafts" : "Reply"}
                   </Button>
                 </div>
               </div>

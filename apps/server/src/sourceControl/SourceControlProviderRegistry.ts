@@ -16,6 +16,10 @@ import * as BitbucketSourceControlProvider from "./BitbucketSourceControlProvide
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
+import * as CruxApi from "./CruxApi.ts";
+import * as CruxCli from "./CruxCli.ts";
+import * as MidwayCoralClient from "./CruxBetaTransport.ts";
+import * as CruxSourceControlProvider from "./CruxSourceControlProvider.ts";
 import * as SourceControlProvider from "./SourceControlProvider.ts";
 import {
   probeSourceControlProvider,
@@ -302,6 +306,11 @@ export const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketSourceControlProvider.make;
   const bitbucketDiscovery = yield* BitbucketSourceControlProvider.makeDiscovery;
   const azureDevOps = yield* AzureDevOpsSourceControlProvider.make;
+  const crux = yield* CruxSourceControlProvider.make.pipe(
+    Effect.provide(
+      Layer.merge(CruxCli.layer, CruxApi.layer.pipe(Layer.provide(MidwayCoralClient.layer))),
+    ),
+  );
   return yield* makeWithProviders([
     {
       kind: "github",
@@ -324,6 +333,11 @@ export const make = Effect.gen(function* () {
       discovery: bitbucketDiscovery,
     },
     { kind: "forgejo", provider: forgejo, discovery: forgejoDiscovery },
+    { kind: "crux", provider: SourceControlProvider.SourceControlProvider.of({
+      ...crux,
+      createChangeRequest: (input) => Effect.fail(new SourceControlProviderError({ provider: "crux", operation: "createChangeRequest", cwd: input.cwd, detail: "Amazon beta is read-only. Create reviews outside T3." })),
+      createRepository: (input) => Effect.fail(new SourceControlProviderError({ provider: "crux", operation: "createRepository", cwd: input.cwd, detail: "Amazon beta is read-only." })),
+    }), discovery: CruxSourceControlProvider.discovery },
   ]);
 });
 

@@ -41,3 +41,17 @@ export function isFileDiffCollapsed(
   const foldedByDefault = foldOverride === "folded";
   return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
 }
+
+/** Uses the reader's default so writing a fold state cannot disagree about an unset override. */
+export function setFileDiffCollapsed(
+  fileKey: string,
+  collapsed: boolean,
+  foldOverride: DiffFoldOverride,
+  toggledFileKeys: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const foldedByDefault = isFileDiffCollapsed(fileKey, foldOverride, new Set());
+  const next = new Set(toggledFileKeys);
+  if (collapsed === foldedByDefault) next.delete(fileKey);
+  else next.add(fileKey);
+  return next;
+}

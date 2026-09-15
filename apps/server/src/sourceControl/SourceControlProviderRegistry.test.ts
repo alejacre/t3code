@@ -285,6 +285,23 @@ it.effect("routes Azure DevOps remotes to the Azure DevOps provider", () =>
   }),
 );
 
+it.effect("routes GitFarm remotes to the CRUX provider", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry({
+      remotes: [
+        {
+          name: "origin",
+          url: "ssh://git.amazon.com/pkg/T3CodeAmazonInternal",
+        },
+      ],
+    });
+
+    const provider = yield* registry.resolve({ cwd: "/repo" });
+
+    assert.strictEqual(provider.kind, "crux");
+  }),
+);
+
 it.effect("falls back to a non-origin remote when origin is not configured", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry({

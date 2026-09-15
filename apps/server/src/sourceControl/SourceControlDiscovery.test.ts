@@ -485,6 +485,7 @@ it.effect("reports implemented tools separately from locally available executabl
           auth: "unknown",
           account: Option.none(),
         },
+        { kind: "crux", status: "missing", auth: "unknown", account: Option.none() },
       ],
     );
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
@@ -547,6 +548,12 @@ Logged in to gitlab.com as gitlab-user
         input.args.join(" ") === "account show --query user.name -o tsv"
       ) {
         return Effect.succeed(processOutput("azure-user@example.com\n"));
+      }
+      if (
+        input.command === "my" &&
+        input.args.join(" ") === "cr list-open-reviews --packages T3CodeAmazonInternal"
+      ) {
+        return Effect.succeed(processOutput("{}\n"));
       }
       return Effect.fail(
         new VcsProcessSpawnError({
@@ -623,6 +630,7 @@ Logged in to gitlab.com as gitlab-user
           account: Option.some("forgejo-user"),
           detail: Option.none(),
         },
+        { kind: "crux", auth: "authenticated", account: Option.fromNullishOr(process.env.USER), detail: Option.none() },
       ],
     );
   }).pipe(Effect.provide(testLayer));

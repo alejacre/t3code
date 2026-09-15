@@ -3,6 +3,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { EnvironmentId } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
+  collectLimitAvailabilityNotices,
   collectLimitNotices,
   collectLimitPools,
   formatDuration,
@@ -209,16 +210,25 @@ export function UsageLimitsSection({
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
   const pools = collectLimitPools(collectLimitAccounts(selected), now);
   const notices = collectLimitNotices(selected);
+  const availabilityNotices = collectLimitAvailabilityNotices(selected);
   const colors = useProviderColors();
   return (
     <View className="gap-6">
-      {pools.length === 0 && notices.length === 0 && failedLabels.length === 0 ? (
+      {pools.length === 0 &&
+      notices.length === 0 &&
+      failedLabels.length === 0 &&
+      availabilityNotices.length === 0 ? (
         <Text className="py-12 text-center text-base text-foreground-muted">
           {selected.size === 0
             ? "Select an environment to see limits."
             : "No provider on the selected environments reports subscription limits."}
         </Text>
       ) : null}
+      {availabilityNotices.map((notice) => (
+        <Text key={notice} className="text-sm text-foreground-muted">
+          {notice}
+        </Text>
+      ))}
       {pools.map((pool) => (
         <View key={pool.driver} className="gap-3">
           <View className="flex-row items-center gap-2 px-1">

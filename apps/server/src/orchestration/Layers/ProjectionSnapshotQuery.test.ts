@@ -54,6 +54,7 @@ it.effect("reads project shells without loading threads or resolving excluded pr
     Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(
       Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolveRoot: () => Effect.succeed(null),
         resolve: (root) =>
           Effect.sync(() => {
             resolved.push(root);
@@ -2369,6 +2370,7 @@ it.effect(
       Layer.provide(ThreadPlanProgress.layer),
       Layer.provideMerge(
         Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolveRoot: (cwd: string) => Effect.succeed(cwd),
           resolve: (cwd: string) =>
             Effect.sync(() => {
               resolveCalls.push(cwd);
@@ -3417,6 +3419,7 @@ it.effect("omits foreign-host PRs from legacy snapshots while preserving native 
     Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(
       Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolveRoot: () => Effect.succeed(null),
         resolve: () =>
           Effect.succeed({
             canonicalKey: "github.com/acme/web",

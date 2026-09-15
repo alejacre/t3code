@@ -11,12 +11,13 @@ import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import { browserCryptoLayer } from "../cloud/dpop";
 import { managedRelayClientLayer } from "../cloud/managedRelayLayer";
 import { resolveCloudPublicConfig, resolveRelayTracingConfig } from "../cloud/publicConfig";
+import { amazonTunnelFetch } from "./amazonTunnelFetch";
 
 function configuredRelayUrl(): string {
   return resolveCloudPublicConfig().relayUrl ?? "http://relay.invalid";
 }
 
-const httpClientLayer = remoteHttpClientLayer((input, init) => globalThis.fetch(input, init));
+const httpClientLayer = remoteHttpClientLayer(amazonTunnelFetch);
 const relayTracingLayer = makeRelayClientTracingLayer(resolveRelayTracingConfig(), {
   serviceName: "t3-web-relay-client",
   serviceVersion: import.meta.env.APP_VERSION,

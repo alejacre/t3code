@@ -1,6 +1,7 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 const EMPTY_ASYNC_RESULT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
@@ -17,9 +18,13 @@ export interface EnvironmentQueryView<A> {
 
 export function formatEnvironmentQueryError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The environment request failed.";
+  // Serialized RPC defects can be strings, and cross-realm errors are not instanceof Error.
+  const message = Predicate.isString(error)
+    ? error
+    : Predicate.isObject(error) && "message" in error && Predicate.isString(error.message)
+      ? error.message
+      : null;
+  return message?.trim() || "The environment request failed. Check the connection and refresh.";
 }
 
 export function useEnvironmentQuery<A, E>(

@@ -203,6 +203,7 @@ const bootstrap = Effect.gen(function* () {
     targetOrigin: rendererTarget,
     backendOrigin: backendConfig.httpBaseUrl,
     clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
+    amazonEnabled: environment.amazonEnabled,
   });
   yield* logBootstrapInfo("bootstrap resolved backend endpoint", {
     baseUrl: backendConfig.httpBaseUrl.href,

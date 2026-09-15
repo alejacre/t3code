@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   presentations: new Map(),
-  refreshProviders: vi.fn(async () => undefined),
+  refreshProviders: vi.fn(async (_input: unknown) => ({ _tag: "Success" })),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.presentations }));
 vi.mock("../../state/presentation", () => ({
@@ -18,7 +18,12 @@ vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../hooks/useSettings", () => ({ usePrimarySettings: () => "24h" }));
 vi.mock("../../state/usage", () => ({
   useUsage: () => ({
-    merged: mergeUsage([], USAGE_CONTRACT_VERSION),
+    merged: {
+      ...mergeUsage([], USAGE_CONTRACT_VERSION),
+      sessions: 417,
+      costUsd: 123.45,
+      totalTokens: 1000,
+    },
     environments: [
       {
         environmentId: EnvironmentId.make("test"),
@@ -86,7 +91,8 @@ let renderer: ReactTestRenderer;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-11T12:00:00Z"));
-  state.refreshProviders.mockClear();
+  state.refreshProviders.mockReset();
+  state.refreshProviders.mockResolvedValue({ _tag: "Success" });
   state.presentations = new Map([
     [
       EnvironmentId.make("test"),
@@ -176,4 +182,108 @@ it("uses the current time when returning to limits from tokens", async () => {
     JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
   ).toContain("in 1h 0m");
   expect(state.refreshProviders).not.toHaveBeenCalled();
+});
+
+it("keeps Bedrock limits informational after refresh and preserves recorded costs and tokens", async () => {
+  const local = state.presentations.get(EnvironmentId.make("test"));
+  local.serverConfig.providers = ["Astra", "Builder", "FBA"].map((name) => ({
+    ...local.serverConfig.providers[0],
+    instanceId: ProviderInstanceId.make(name),
+    displayName: `Codex ${name}`,
+    auth: { status: "authenticated", type: "amazonBedrock" },
+    usageLimits: {
+      checkedAt: "2026-09-11T12:00:00Z",
+      windows: [],
+      unavailable: {
+        reason: "probeFailed",
+        message: "Codex could not read usage (JSON-RPC -32600).",
+      },
+    },
+  }));
+  state.presentations.set(EnvironmentId.make("cloud"), {
+    ...local,
+    entry: { target: { label: "Cloud Desktop" } },
+  });
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  const visibleText = () =>
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
+  expect(visibleText()).toContain("API-billed");
+  expect(visibleText()).not.toContain("JSON-RPC");
+  await act(async () => {
+    renderer.root
+      .findAllByProps({ "aria-label": "Refresh limits" })
+      .find((node) => node.type === "button")!
+      .props.onClick();
+  });
+  expect(state.refreshProviders).toHaveBeenCalledWith({ environmentId: "cloud", input: {} });
+  expect(visibleText()).toContain("API-billed");
+  expect(visibleText()).not.toContain("JSON-RPC");
+  const selectMetric = (metric: string) =>
+    renderer.root
+      .findAll((node) => node.type === "div" && node.props["aria-label"] === "Usage metric")[0]!
+      .props.onValueChange([metric]);
+  await act(() => selectMetric("cost"));
+  expect(visibleText()).toContain("123.45");
+  expect(visibleText()).toContain("417 sessions");
+  await act(() => selectMetric("tokens"));
+  expect(visibleText()).toContain("1K");
+});
+
+it("shows a failed environment refresh beside usable quotas and clears it after recovery", async () => {
+  state.refreshProviders.mockResolvedValueOnce({ _tag: "Failure" });
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  const refresh = async () => {
+    await act(async () => {
+      renderer.root
+        .findAllByProps({ "aria-label": "Refresh limits" })
+        .find((node) => node.type === "button")!
+        .props.onClick();
+    });
+  };
+  const visibleText = () =>
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
+  await refresh();
+  expect(visibleText()).toContain("could not refresh limits");
+  expect(visibleText()).toContain("in 2h 0m");
+  await refresh();
+  expect(visibleText()).not.toContain("could not refresh limits");
+});
+
+it("keeps quota bars visible when refresh publishes a failed probe with retained windows", async () => {
+  const local = state.presentations.get(EnvironmentId.make("test"));
+  const good = local.serverConfig.providers[0];
+  state.refreshProviders.mockImplementationOnce(async () => {
+    local.serverConfig.providers = [
+      {
+        ...good,
+        usageLimits: {
+          ...good.usageLimits,
+          unavailable: {
+            reason: "probeFailed",
+            message: "Codex did not answer the usage request.",
+          },
+        },
+      },
+    ];
+    return { _tag: "Success" };
+  });
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  const visibleText = () =>
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
+  expect(visibleText()).toContain("in 2h 0m");
+  await act(async () => {
+    renderer.root
+      .findAllByProps({ "aria-label": "Refresh limits" })
+      .find((node) => node.type === "button")!
+      .props.onClick();
+  });
+  expect(visibleText()).toContain("in 2h 0m");
+  expect(visibleText()).toContain("Codex did not answer the usage request.");
+  expect(visibleText()).toContain("Showing last-known limits.");
 });

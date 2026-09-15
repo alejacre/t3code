@@ -158,6 +158,17 @@ describe("codexRateLimitsToUpdate", () => {
 });
 
 describe("codexRateLimitsFailureMessage", () => {
+  it("does not classify the Amazon RPC rejection as unsupported without account evidence", () => {
+    expect(
+      codexRateLimitsFailureMessage(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32600,
+          errorMessage: "codex account authentication required to read rate limits",
+        }),
+      ),
+    ).toBe("Codex could not read usage (JSON-RPC -32600).");
+  });
+
   it("keeps the JSON-RPC code and nothing else from a request failure", () => {
     expect(
       codexRateLimitsFailureMessage(

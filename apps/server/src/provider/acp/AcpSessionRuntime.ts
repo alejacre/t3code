@@ -934,10 +934,12 @@ export const make = (
         return;
       }
 
-      yield* acp.agent.cancel({ sessionId: started.sessionId });
       if (Option.isNone(activePrompt)) {
+        // A late Stop between prompts must not arm cancellation for the next
+        // prompt. There is no native work left to cancel in this runtime.
         return;
       }
+      yield* acp.agent.cancel({ sessionId: started.sessionId });
       const completed = yield* Effect.gen(function* () {
         const result = yield* Fiber.await(activePrompt.value.fiber);
         yield* Deferred.await(activePrompt.value.completed);

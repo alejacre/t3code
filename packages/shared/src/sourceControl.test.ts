@@ -31,6 +31,20 @@ describe("source control presentation", () => {
     });
   });
 
+  it("uses code review terminology for CRUX", () => {
+    expect(getChangeRequestTerminologyForKind("crux")).toEqual({
+      shortLabel: "CR",
+      singular: "code review",
+    });
+    expect(resolveChangeRequestPresentation({ kind: "crux", name: "CRUX", baseUrl: "" })).toEqual(
+      expect.objectContaining({
+        providerName: "CRUX",
+        shortName: "CR",
+        longName: "code review",
+      }),
+    );
+  });
+
   it("falls back to generic change request copy for unknown providers", () => {
     expect(
       resolveChangeRequestPresentation({ kind: "unknown", name: "forge", baseUrl: "" }),

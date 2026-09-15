@@ -1482,6 +1482,12 @@ export function PullRequestDetailPanel({
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
+      {detail?.provider === "crux" && (
+        <p className="border-b px-4 py-2 text-xs text-muted-foreground">
+          Amazon beta · solo lectura · identidad del lector: {detail.viewer ?? "no disponible"}.
+          El proyecto y los hilos permanecen en su entorno de ejecución.
+        </p>
+      )}
       {threadPickerOpen && detail ? (
         <PullRequestThreadLinks
           key={`${environmentId}:${detail.url}`}

@@ -40,6 +40,7 @@ import {
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
+import { codexSubscriptionLimitsUnsupportedMessage } from "@t3tools/shared/usageLimits";
 import {
   codexRateLimitsFailureMessage,
   codexRateLimitsToLimits,
@@ -71,7 +72,7 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
-  readonly rateLimits?: CodexRateLimitsProbe;
+  readonly rateLimits?: CodexRateLimitsProbe | undefined;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -441,24 +442,28 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       requestAllCodexModels(client),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
-      client.request("account/rateLimits/read", undefined).pipe(
-        Effect.map((response): CodexRateLimitsProbe => ({
-          snapshot: response.rateLimits,
-          rateLimitsByLimitId: response.rateLimitsByLimitId,
-          resetCredits: response.rateLimitResetCredits,
-        })),
-        Effect.timeoutOption(Duration.millis(RATE_LIMITS_PROBE_TIMEOUT_MS)),
-        Effect.map(
-          Option.getOrElse((): CodexRateLimitsProbe => ({
-            failure: "Codex did not answer the usage request.",
-          })),
-        ),
-        Effect.catch((error) =>
-          Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
-            Effect.as<CodexRateLimitsProbe>({ failure: codexRateLimitsFailureMessage(error) }),
+      // Amazon Codex authenticates as amazonBedrock but rejects this ChatGPT-only
+      // endpoint with -32600; that is not a Bedrock authentication failure.
+      codexSubscriptionLimitsUnsupportedMessage(accountResponse.account?.type)
+        ? Effect.succeed(undefined)
+        : client.request("account/rateLimits/read", undefined).pipe(
+            Effect.map((response): CodexRateLimitsProbe => ({
+              snapshot: response.rateLimits,
+              rateLimitsByLimitId: response.rateLimitsByLimitId,
+              resetCredits: response.rateLimitResetCredits,
+            })),
+            Effect.timeoutOption(Duration.millis(RATE_LIMITS_PROBE_TIMEOUT_MS)),
+            Effect.map(
+              Option.getOrElse((): CodexRateLimitsProbe => ({
+                failure: "Codex did not answer the usage request.",
+              })),
+            ),
+            Effect.catch((error) =>
+              Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
+                Effect.as<CodexRateLimitsProbe>({ failure: codexRateLimitsFailureMessage(error) }),
+              ),
+            ),
           ),
-        ),
-      ),
     ],
     { concurrency: "unbounded" },
   );
@@ -652,21 +657,23 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   const snapshot = probeResult.success.value;
   const accountStatus = accountProbeStatus(snapshot.account);
-  const usageLimits =
-    snapshot.account.account?.type === "apiKey"
-      ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
-      : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
-        ? makeUnavailableUsageLimits({
-            checkedAt,
-            reason: "probeFailed",
-            ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
-          })
-        : codexRateLimitsToLimits({
-            snapshot: snapshot.rateLimits.snapshot,
-            rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
-            resetCredits: snapshot.rateLimits.resetCredits,
-            checkedAt,
-          });
+  const unsupportedMessage = codexSubscriptionLimitsUnsupportedMessage(
+    snapshot.account.account?.type,
+  );
+  const usageLimits = unsupportedMessage
+    ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported", message: unsupportedMessage })
+    : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
+      ? makeUnavailableUsageLimits({
+          checkedAt,
+          reason: "probeFailed",
+          ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
+        })
+      : codexRateLimitsToLimits({
+          snapshot: snapshot.rateLimits.snapshot,
+          rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
+          resetCredits: snapshot.rateLimits.resetCredits,
+          checkedAt,
+        });
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,

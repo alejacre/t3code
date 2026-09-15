@@ -24,6 +24,48 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/** These Codex account types do not expose ChatGPT subscription quotas. */
+export function codexSubscriptionLimitsUnsupportedMessage(
+  accountType: string | undefined,
+): string | undefined {
+  if (accountType === "amazonBedrock") {
+    return "Amazon Bedrock usage is API-billed; ChatGPT subscription limits do not apply. See Cost for recorded costs and tokens.";
+  }
+  if (accountType === "apiKey") {
+    return "API-key usage has no ChatGPT subscription limits. See Cost for recorded costs and tokens.";
+  }
+  return undefined;
+}
+
+/**
+ * Older servers publish the Bedrock rejection as a generic RPC failure. Repair
+ * only that exact response with explicit account evidence, never by code alone.
+ * Do not change successful windows, other failures, or the provider's auth.
+ */
+function normalizeLegacyCodexLimits(provider: ServerProvider): ServerProvider {
+  const limits = provider.usageLimits;
+  const message = codexSubscriptionLimitsUnsupportedMessage(provider.auth.type);
+  if (
+    provider.driver !== "codex" ||
+    provider.auth.status !== "authenticated" ||
+    !message ||
+    !limits ||
+    limits.windows.length > 0 ||
+    limits.unavailable?.reason !== "probeFailed" ||
+    limits.unavailable.message !== "Codex could not read usage (JSON-RPC -32600)."
+  ) {
+    return provider;
+  }
+  return {
+    ...provider,
+    usageLimits: {
+      checkedAt: limits.checkedAt,
+      windows: [],
+      unavailable: { reason: "unsupported", message },
+    },
+  };
+}
+
 /**
  * Providers that belong on the Limits view: enabled, installed, and one whose
  * driver reports subscription usage at all. A driver with no notion of usage
@@ -32,13 +74,15 @@ const DAY = 24 * HOUR;
 export function providersWithLimits(
   providers: readonly ServerProvider[],
 ): readonly ServerProvider[] {
-  return providers.filter(
-    (provider) =>
-      provider.enabled &&
-      provider.installed &&
-      isProviderAvailable(provider) &&
-      provider.usageLimits !== undefined,
-  );
+  return providers
+    .filter(
+      (provider) =>
+        provider.enabled &&
+        provider.installed &&
+        isProviderAvailable(provider) &&
+        provider.usageLimits !== undefined,
+    )
+    .map(normalizeLegacyCodexLimits);
 }
 
 export type LimitPresentations = ReadonlyMap<
@@ -157,7 +201,14 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   for (const [environmentId, presentation] of presentations) {
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
-      if (!provider.usageLimits || limitsNotice(provider.usageLimits) !== null) continue;
+      // A failed probe may retain real windows and their original timestamp.
+      // Keep those bars; collectLimitNotices independently exposes the failure.
+      if (
+        !provider.usageLimits ||
+        provider.usageLimits.windows.length === 0 ||
+        provider.usageLimits.unavailable?.reason === "unsupported"
+      )
+        continue;
       merge(
         accountKey(provider.driver, provider.auth.email) ??
           `${environmentId}:${provider.instanceId}`,
@@ -215,8 +266,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
 }
 
 /**
- * What the pooled views cannot draw as a bar: a hub that failed to read, a
- * provider whose probe failed. Accounts that can never report (API keys)
+ * Problems shown alongside pooled bars, including a provider whose failed
+ * probe retained last-known windows. Accounts that can never report (API keys)
  * are left out; there is nothing for the user to act on. The environment
  * is named only when more than one is connected.
  */
@@ -243,6 +294,24 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
     }
   }
   return notices;
+}
+
+/** Informational, not failed reads; identical API explanations appear only once. */
+export function collectLimitAvailabilityNotices(
+  presentations: LimitPresentations,
+): readonly string[] {
+  const messages = new Set<string>();
+  for (const presentation of presentations.values()) {
+    for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
+      const limits = provider.usageLimits;
+      if (limits?.unavailable?.reason !== "unsupported") continue;
+      messages.add(
+        limits.unavailable.message ??
+          "This account has no subscription limits. See Cost for recorded costs and tokens.",
+      );
+    }
+  }
+  return [...messages];
 }
 
 export interface LimitPoolMember {
@@ -391,13 +460,14 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
   return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
 }
 
-/** The one-line status under a provider heading when there are no bars to draw. */
+/** A missing-data or failure notice, also shown beside retained last-known bars. */
 export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
   if (limits.unavailable?.reason === "unsupported") {
     return limits.unavailable.message ?? "This account has no subscription limits.";
   }
   if (limits.unavailable?.reason === "probeFailed") {
-    return limits.unavailable.message ?? "Could not read limits.";
+    const message = limits.unavailable.message ?? "Could not read limits.";
+    return limits.windows.length > 0 ? `${message} Showing last-known limits.` : message;
   }
   return limits.windows.length === 0 ? "No limits reported." : null;
 }

@@ -80,10 +80,23 @@ describe("applyUsageLimitsUpdate", () => {
 
 describe("resolveUsageLimitsAfterProbe", () => {
   it("keeps the last good windows through a failed probe but not an unsupported one", () => {
-    const failed = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
+    const failed = {
+      checkedAt: "2026-09-03T12:01:00.000Z",
+      windows: [],
+      unavailable: {
+        reason: "probeFailed" as const,
+        message: "Codex did not answer the usage request.",
+      },
+    };
     const unsupported = { checkedAt, windows: [], unavailable: { reason: "unsupported" as const } };
-    expect(resolveUsageLimitsAfterProbe({ published, probed: failed })).toBe(published);
+    const retained = resolveUsageLimitsAfterProbe({ published, probed: failed });
+    expect(retained).toEqual({ ...published, unavailable: failed.unavailable });
+    expect(retained?.checkedAt).toBe(checkedAt);
+    expect(resolveUsageLimitsAfterProbe({ published: retained, probed: failed })).toEqual(retained);
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
+    expect(resolveUsageLimitsAfterProbe({ published: retained, probed: published })).toBe(
+      published,
+    );
   });
 });

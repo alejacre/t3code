@@ -51,6 +51,9 @@ export const makeKiroAdapter = Effect.fn("makeKiroAdapter")(function* (
     provider: ProviderDriverKind.make("kiro"),
     providerLabel: "Kiro",
     enableGrokExtensions: false,
+    // ACP has no negotiated steering operation for Kiro. Keep every follow-up
+    // behind the live prompt instead of implementing steering by cancellation.
+    followUpBehavior: "queue",
     autoApproveEditPermissions: true,
     // Bedrock rejects images whose base64 payload exceeds 5 MiB.
     maxImageBytes: KIRO_SEND_TURN_MAX_IMAGE_BYTES,

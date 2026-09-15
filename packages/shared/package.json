@@ -263,6 +263,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./amazonTunnel": {
+      "types": "./src/amazonTunnel.ts",
+      "import": "./src/amazonTunnel.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

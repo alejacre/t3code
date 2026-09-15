@@ -67,6 +67,10 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
     normalized.includes("glab auth login") ||
     normalized.includes("az devops login") ||
     normalized.includes("please run az login") ||
+    normalized.includes("run `mwinit`") ||
+    normalized.includes("run mwinit") ||
+    normalized.includes("midway session") ||
+    normalized.includes("midway authentication") ||
     normalized.includes("no oauth token") ||
     normalized.includes("unauthorized")
   ) {

@@ -65,12 +65,18 @@ function writableQueryFamily<A, E>(
   );
   return ({
     environmentId,
-    input: { projectId, host, repository, number },
+    input: { projectId, host, repository, number, amazonProject },
   }: Parameters<typeof family>[0]) =>
     writable(
       family({
         environmentId,
-        input: { projectId, ...(host === undefined ? {} : { host }), repository, number },
+        input: {
+          projectId,
+          ...(host === undefined ? {} : { host }),
+          repository,
+          number,
+          ...(amazonProject === undefined ? {} : { amazonProject }),
+        },
       }),
     );
 }
@@ -267,6 +273,9 @@ export function createPullRequestEnvironmentAtoms<R, E>(
             input.changeType,
             input.oldPath,
             input.newPath,
+            input.packageName ?? null,
+            input.sourceBlobId ?? null,
+            input.destinationBlobId ?? null,
           ]),
       },
     }),

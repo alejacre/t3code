@@ -1,6 +1,7 @@
 import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
+  RelayConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId } from "@t3tools/contracts";
 import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
@@ -65,6 +66,43 @@ describe("makeCatalogStore", () => {
 
       expect(yield* Effect.flip(store.read)).toBe(failure);
     }),
+  );
+
+  it.effect(
+    "does not cache an unavailable catalog as empty or overwrite it before a successful retry",
+    () =>
+      Effect.gen(function* () {
+        const catalog = {
+          ...emptyCatalog,
+          targets: [
+            new RelayConnectionTarget({
+              environmentId: EnvironmentId.make("remote-example"),
+              label: "Saved remote",
+            }),
+          ],
+        };
+        const failure = new ConnectionTransientError({
+          reason: "remote-unavailable",
+          detail: "OS secure storage is unavailable; retry after unlocking.",
+        });
+        let unavailable = true;
+        const writes: string[] = [];
+        const store = yield* makeCatalogStore({
+          read: Effect.suspend(() =>
+            unavailable ? Effect.fail(failure) : Effect.succeed(encodeCatalog(catalog)),
+          ),
+          write: (raw) =>
+            Effect.sync(() => {
+              writes.push(raw);
+            }),
+        });
+        expect(yield* store.read.pipe(Effect.flip)).toBe(failure);
+        expect(yield* store.update(() => emptyCatalog).pipe(Effect.flip)).toBe(failure);
+        expect(writes).toEqual([]);
+        unavailable = false;
+        expect(yield* store.read).toEqual(catalog);
+        expect(writes).toEqual([]);
+      }),
   );
 });
 

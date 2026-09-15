@@ -14,6 +14,7 @@ import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
   collectLimitAccounts,
+  collectLimitAvailabilityNotices,
   collectLimitNotices,
   collectLimitPools,
   elapsedShare,
@@ -96,6 +97,79 @@ describe("limitsNotice", () => {
 });
 
 describe("providersWithLimits", () => {
+  const legacyMessage = "Codex could not read usage (JSON-RPC -32600).";
+  const legacy = provider({
+    auth: { status: "authenticated", type: "amazonBedrock" },
+    usageLimits: {
+      checkedAt: "2026-09-03T11:00:00.000Z",
+      windows: [],
+      unavailable: { reason: "probeFailed", message: legacyMessage },
+    },
+  });
+
+  it("repairs older server Bedrock limits without mutating the server snapshot or auth", () => {
+    const normalized = providersWithLimits([legacy])[0]!;
+    expect(normalized.usageLimits?.unavailable?.reason).toBe("unsupported");
+    expect(normalized.usageLimits?.unavailable?.message).toContain("API-billed");
+    expect(normalized.auth).toBe(legacy.auth);
+    expect(legacy.usageLimits?.unavailable?.reason).toBe("probeFailed");
+  });
+
+  it("does not infer unsupported from an RPC code, display name, unknown auth or another failure", () => {
+    for (const candidate of [
+      { ...legacy, auth: { status: "authenticated" as const, type: "chatgpt" } },
+      { ...legacy, auth: { status: "unknown" as const, type: "amazonBedrock" } },
+      { ...legacy, auth: { status: "authenticated" as const }, displayName: "Codex Bedrock" },
+      { ...legacy, driver: ProviderDriverKind.make("claudeAgent") },
+      { ...legacy, usageLimits: { ...legacy.usageLimits!, windows: [window] } },
+      {
+        ...legacy,
+        usageLimits: {
+          ...legacy.usageLimits!,
+          unavailable: {
+            reason: "probeFailed" as const,
+            message: "Codex did not answer the usage request.",
+          },
+        },
+      },
+      {
+        ...legacy,
+        usageLimits: {
+          ...legacy.usageLimits!,
+          unavailable: {
+            reason: "probeFailed" as const,
+            message: "Codex could not read usage (JSON-RPC -32603).",
+          },
+        },
+      },
+    ]) {
+      expect(providersWithLimits([candidate])[0]).toBe(candidate);
+    }
+  });
+
+  it("shows one neutral explanation for six Bedrock configurations across two environments", () => {
+    const input = new Map(
+      ["Local", "Cloud Desktop"].map((label) => [
+        EnvironmentId.make(label),
+        {
+          entry: { target: { label } },
+          serverConfig: {
+            providers: ["Astra", "Builder", "FBA"].map((name) => ({
+              ...legacy,
+              instanceId: ProviderInstanceId.make(name),
+              displayName: `Codex ${name}`,
+            })),
+          },
+        },
+      ]),
+    );
+    expect(collectLimitAccounts(input)).toEqual([]);
+    expect(collectLimitNotices(input)).toEqual([]);
+    const info = collectLimitAvailabilityNotices(input);
+    expect(info).toHaveLength(1);
+    expect(info[0]).toContain("See Cost for recorded costs and tokens.");
+  });
+
   it("keeps only usable providers whose driver reports limits at all", () => {
     const limits = { checkedAt: "2026-09-03T11:00:00.000Z", windows: [window] };
     const codex = provider({ usageLimits: limits });
@@ -698,6 +772,119 @@ describe("collectLimitNotices", () => {
     checkedAt,
     accounts: [],
   };
+
+  it("keeps last-known quota bars and their timestamp when a provider probe fails", () => {
+    const good = provider({
+      displayName: "Codex Astra",
+      auth: { status: "authenticated", type: "chatgpt", email: "same@example.com" },
+      usageLimits: { checkedAt, windows: [window] },
+    });
+    const input = new Map([
+      [EnvironmentId.make("local"), { ...laptop, serverConfig: { providers: [good] } }],
+    ]);
+    expect(collectLimitAccounts(input)).toHaveLength(1);
+    const failure = "Codex could not read usage (JSON-RPC -32600).";
+    const retained = {
+      ...good,
+      usageLimits: {
+        ...good.usageLimits!,
+        unavailable: { reason: "probeFailed" as const, message: failure },
+      },
+    };
+    input.set(EnvironmentId.make("local"), { ...laptop, serverConfig: { providers: [retained] } });
+    const accounts = collectLimitAccounts(input);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.limits).toBe(retained.usageLimits);
+    expect(accounts[0]?.limits.checkedAt).toBe(checkedAt);
+    expect(collectLimitPools(accounts, now)[0]?.windows[0]?.remainingPercent).toBe(60);
+    expect(collectLimitNotices(input)).toEqual([
+      `Codex Astra: ${failure} Showing last-known limits.`,
+    ]);
+
+    input.set(EnvironmentId.make("cloud"), {
+      entry: { target: { label: "Cloud Desktop" } },
+      serverConfig: {
+        providers: [
+          {
+            ...good,
+            usageLimits: {
+              checkedAt: "2026-09-03T11:30:00.000Z",
+              windows: [{ ...window, usedPercent: 50 }],
+            },
+          },
+        ],
+      },
+    });
+    const merged = collectLimitAccounts(input);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.limits.windows[0]?.usedPercent).toBe(50);
+    expect(merged[0]?.limits.unavailable).toBeUndefined();
+    expect(collectLimitNotices(input)).toEqual([
+      `Laptop · Codex Astra: ${failure} Showing last-known limits.`,
+    ]);
+
+    input.delete(EnvironmentId.make("cloud"));
+    input.set(EnvironmentId.make("local"), {
+      ...laptop,
+      serverConfig: {
+        providers: [
+          {
+            ...retained,
+            usageLimits: { ...retained.usageLimits, unavailable: { reason: "unsupported" } },
+          },
+        ],
+      },
+    });
+    expect(collectLimitAccounts(input)).toEqual([]);
+  });
+
+  it("deduplicates genuine account quotas while retaining the other environment's failure", () => {
+    const good = provider({
+      auth: { status: "authenticated", type: "chatgpt", email: "same@example.com" },
+      displayName: "Codex Astra",
+      usageLimits: { checkedAt, windows: [window] },
+    });
+    const failure = "Codex could not read usage (JSON-RPC -32600).";
+    const bad = {
+      ...good,
+      usageLimits: {
+        checkedAt,
+        windows: [],
+        unavailable: { reason: "probeFailed" as const, message: failure },
+      },
+    };
+    const input = new Map([
+      [
+        EnvironmentId.make("local"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [
+              good,
+              {
+                ...good,
+                instanceId: ProviderInstanceId.make("codex-builder"),
+                displayName: "Codex Builder",
+              },
+            ],
+          },
+        },
+      ],
+      [
+        EnvironmentId.make("cloud"),
+        {
+          entry: { target: { label: "Cloud Desktop" } },
+          serverConfig: { providers: [bad] },
+        },
+      ],
+    ]);
+    const accounts = collectLimitAccounts(input);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.limits.windows).toEqual([window]);
+    expect(collectLimitPools(accounts, now)[0]?.windows[0]?.remainingPercent).toBe(60);
+    expect(collectLimitNotices(input)).toEqual([`Cloud Desktop · Codex Astra: ${failure}`]);
+    expect(collectLimitAvailabilityNotices(input)).toEqual([]);
+  });
 
   it("names failures and silence, skips unsupported accounts, and labels environments only when several", () => {
     const failed = provider({

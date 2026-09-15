@@ -4,6 +4,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
+import * as NodeOS from "node:os";
 
 import {
   createPackageWithOptions,
@@ -2641,6 +2642,7 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  if (version.includes("-beta.")) return "T3 Custom Beta";
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Custom (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Custom");
@@ -2666,7 +2668,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId: version.includes("-beta.") ? `${DESKTOP_APP_ID}.beta` : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Custom-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
@@ -2714,13 +2716,24 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
+        ...(version.includes("-beta.")
+          ? {
+              LSEnvironment: {
+                T3CODE_HOME: path.join(NodeOS.homedir(), ".t3-beta"),
+                T3CODE_DESKTOP_USER_DATA_DIR: path.join(NodeOS.homedir(), ".t3-beta/electron"),
+              T3CODE_AMAZON_BETA: "1",
+              T3CODE_DISABLE_AUTO_UPDATE: "1",
+                NODE_USE_SYSTEM_CA: "1",
+              },
+            }
+          : {}),
         NSScreenCaptureUsageDescription:
           "T3 Code captures the active window when you use the window capture shortcut.",
       },
       protocols: [
         {
           name: "T3 Custom",
-          schemes: ["t3code", "t3code-dev"],
+          schemes: version.includes("-beta.") ? ["t3code-beta"] : ["t3code", "t3code-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),

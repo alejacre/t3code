@@ -1,3 +1,4 @@
+import { CRUX_COMMENT_PUBLISH_NOTICE } from "./pullRequestDetail.logic";
 /**
  * The review form floated over the Code tab: how many comments the review is holding, its
  * summary, and the verdict that sends the lot. Hidden entirely on a host that cannot take a
@@ -51,12 +52,14 @@ export function PullRequestReviewBar({
   reference,
   verdicts,
   requestChangesSummaryRequired,
+  publishesAllDrafts = false,
   onSubmitted,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   verdicts: ReadonlyArray<PullRequestReviewVerdict>;
   requestChangesSummaryRequired: boolean;
+  publishesAllDrafts?: boolean;
   onSubmitted: () => void;
 }) {
   const [pending, setPending] = useState(false);
@@ -140,6 +143,9 @@ export function PullRequestReviewBar({
         aria-label="Review summary"
         onChange={(event) => setSummary(reviewKey, event.target.value)}
       />
+      {publishesAllDrafts ? (
+        <p className="mt-2 text-xs text-muted-foreground">{CRUX_COMMENT_PUBLISH_NOTICE}</p>
+      ) : null}
       <div className="mt-2 flex flex-wrap justify-end gap-2">
         {offered.map((verdict) => (
           <Button
@@ -151,7 +157,9 @@ export function PullRequestReviewBar({
           >
             <span className="flex items-center gap-1.5">
               {verdict.icon}
-              {verdict.label}
+              {publishesAllDrafts && verdict.value === "comment"
+                ? "Publish all draft comments"
+                : verdict.label}
             </span>
           </Button>
         ))}
